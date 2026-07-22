@@ -1,0 +1,30 @@
+# Agent session contexts and agent definitions
+.agent-sessions/
+.github/agents/
+
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work.sum
+
+# Dependency directories
+vendor/
+
+# IDE / VS Code
+.vscode/
+*.code-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
