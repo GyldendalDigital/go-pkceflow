@@ -6,15 +6,13 @@ applyTo: "**"
 
 Follow these conventions for all git operations in this project.
 
-## Branch Model (Gitflow variant)
+## Branch Model (trunk-based)
 
-- `master` - production releases (tagged `v*`)
-- `development` - integration branch, all PRs target here
-- `feature/*` - new functionality, branches off development
-- `fix/*` - bug fixes, branches off development
-- `chore/*` - maintenance (deps, CI, tooling), branches off development
-- `release/*` - release prep (version bumps, changelog), branches off development, merges to master + development
-- `hotfix/*` - production emergency fixes, branches off master, merges to master + development
+- `master` - main branch, always the latest working code. PRs target here. Tagged for releases.
+- `feature/*` - new functionality, branches off master
+- `fix/*` - bug fixes, branches off master
+- `chore/*` - maintenance (deps, CI, tooling), branches off master
+- Releases are created by tagging master (e.g., `v1.0.0`)
 
 ## Branch Discipline
 
