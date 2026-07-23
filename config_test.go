@@ -75,12 +75,12 @@ func TestConfig_Validate_Defaults(t *testing.T) {
 
 func TestConfig_Validate_PreservesExplicitValues(t *testing.T) {
 	cfg := Config{
-		IssuerURL:    "https://idp.example.com",
-		ClientID:     "my-app",
-		Scopes:       []string{"openid", "custom"},
-		LoginTimeout: 5 * time.Minute,
+		IssuerURL:     "https://idp.example.com",
+		ClientID:      "my-app",
+		Scopes:        []string{"openid", "custom"},
+		LoginTimeout:  5 * time.Minute,
 		LogoutTimeout: 1 * time.Minute,
-		GracePeriod:  30 * 24 * time.Hour,
+		GracePeriod:   30 * 24 * time.Hour,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -141,7 +141,7 @@ func TestConfig_Validate_DefaultScopesCopied(t *testing.T) {
 }
 
 func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))
+	return len(s) >= len(substr) && (s == substr || s != "" && containsSubstring(s, substr))
 }
 
 func containsSubstring(s, substr string) bool {

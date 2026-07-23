@@ -21,7 +21,7 @@ const (
 	EventLoggedOut = "oidcauth:logged-out"
 
 	// EventTokenRefreshed is emitted after a successful background token refresh.
-	EventTokenRefreshed = "oidcauth:token-refreshed"
+	EventTokenRefreshed = "oidcauth:token-refreshed" //nolint:gosec // G101 false positive: not a credential
 
 	// EventSessionExpired is emitted when the refresh token is permanently
 	// invalid (e.g., revoked) and the grace period (if configured) has expired.

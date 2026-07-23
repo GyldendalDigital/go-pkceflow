@@ -70,7 +70,7 @@ func (c *Config) Validate() error {
 
 // RedactedString returns a string representation of the config safe for logging.
 // It never includes secrets or tokens.
-func (c Config) RedactedString() string {
+func (c *Config) RedactedString() string {
 	return fmt.Sprintf("Config{IssuerURL: %q, ClientID: %q, Scopes: %v, GracePeriod: %s, LoginTimeout: %s, LogoutTimeout: %s}",
 		c.IssuerURL, c.ClientID, c.Scopes, c.GracePeriod, c.LoginTimeout, c.LogoutTimeout)
 }

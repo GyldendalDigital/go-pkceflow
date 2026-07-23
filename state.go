@@ -13,7 +13,7 @@ type TokenState struct {
 }
 
 // IsZero reports whether the token state is empty (no tokens stored).
-func (ts TokenState) IsZero() bool {
+func (ts *TokenState) IsZero() bool {
 	return ts.AccessToken == "" && ts.RefreshToken == "" && ts.IDToken == ""
 }
 
