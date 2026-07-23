@@ -15,7 +15,7 @@ When working on go-pkceflow or wails-pkceflow code, follow these guidelines.
 
 ## Design Principles
 
-1. No framework dependencies in core (no Wails, no Fyne). Platform-native code (CGo) allowed behind build tags for OS-level integrations (Keychain).
+1. No framework dependencies in core (no Wails, no Fyne). No CGo; the library must cross-compile from any platform without platform toolchains.
 2. Focused interfaces: AuthFlowHandler, TokenPersistence, EventEmitter (not a mega-interface)
 3. Configuration via explicit struct with Validate() method and sensible defaults
 4. All errors wrap with %w and include actionable context (what URL, what operation)
