@@ -11,7 +11,7 @@ A framework-agnostic Go library for OIDC Authorization Code flow with PKCE (RFC 
 - OIDC discovery and PKCE S256 authorization code flow
 - Desktop auth via localhost callback server and system browser
 - Mobile auth via deep links (Universal Links / App Links)
-- Pluggable token persistence (keyring, encrypted file, iOS Keychain)
+- Pluggable token persistence (encrypted filestore default, interface for custom backends)
 - Background token refresh with DHCP-style adaptive timing
 - Offline grace period for intermittent connectivity
 - Event-driven auth state notifications
