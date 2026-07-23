@@ -28,10 +28,10 @@ When working on go-pkceflow or wails-pkceflow code, follow these guidelines.
 - PKCE S256 only (never plain)
 - State parameter: 32 bytes, crypto/rand, base64url, compared with subtle.ConstantTimeCompare
 - Never log access tokens, refresh tokens, ID tokens, or authorization codes
-- Desktop token storage: OS credential manager via `zalando/go-keyring` (macOS Keychain, Linux secret-service, Windows Credential Manager)
-- iOS token storage: Keychain via `keybase/go-keychain` (hardware-backed, survives reinstall)
-- Android token storage: filestore in app sandbox (kernel-enforced UID isolation, same security model as browser cookies). Interface allows EncryptedSharedPreferences upgrade for high-security apps.
-- Fallback token storage: AES-256-GCM filestore with machine-ID derived key; fallback to persisted random key (not hostname)
+- Token storage: AES-256-GCM encrypted filestore with machine-ID derived key; fallback to persisted random key (not hostname)
+- Mobile: app sandbox provides isolation (same security model as browser cookies); filestore works without additional platform code
+- Desktop: encrypted file in user config dir with 0600 permissions
+- TokenPersistence interface enables test doubles and future alternative backends (e.g., OS keyring) without breaking changes
 - Localhost server: bind 127.0.0.1 only (never 0.0.0.0)
 
 ## Testing
@@ -58,9 +58,4 @@ Support these IdPs (test with FakeIDPServer, document quirks):
 - Okta (standard)
 - Google (needs access_type=offline instead of offline_access scope)
 
-## Reference
 
-- Technical plan: `.agent-sessions/oidc-library-technical-plan.md`
-- Mobile/storage revision: `.agent-sessions/plans/plan-mobile-implementations-in-library.md`
-- Session context: `.agent-sessions/oidc-library-session-context.md`
-- Reference implementation (external): `~/dev/ordnett_pluss_v4/lib/auth.go`, `lib/tokenstore.go`, `lib/platform.go`, `lib/eventbus.go`

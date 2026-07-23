@@ -1,4 +1,4 @@
-# Agent session contexts and agent definitions
+# Agent session contexts and agent definitions (local workflow, not committed)
 .agent-sessions/
 .github/agents/
 
@@ -14,17 +14,52 @@
 
 # Output of the go coverage tool
 *.out
+coverage.html
 
-# Go workspace file
+# Go workspace file (dev-only, not committed)
+go.work
 go.work.sum
 
 # Dependency directories
 vendor/
 
-# IDE / VS Code
+# IDE - VS Code
 .vscode/
 *.code-workspace
 
-# OS files
+# IDE - JetBrains (GoLand, IntelliJ)
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# IDE - Vim / Neovim
+*.swp
+*.swo
+*~
+tags
+
+# IDE - Emacs
+\#*\#
+.\#*
+*.elc
+
+# IDE - Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# OS - macOS
 .DS_Store
+._*
+
+# OS - Windows
 Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# OS - Linux
+*~
+
+# Build output
+dist/
+build/

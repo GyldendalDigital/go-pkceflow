@@ -8,13 +8,13 @@ Follow these conventions for all git operations in this project.
 
 ## Branch Model (Gitflow variant)
 
-- `main` - production releases (tagged `v*`)
+- `master` - production releases (tagged `v*`)
 - `development` - integration branch, all PRs target here
 - `feature/*` - new functionality, branches off development
 - `fix/*` - bug fixes, branches off development
 - `chore/*` - maintenance (deps, CI, tooling), branches off development
-- `release/*` - release prep (version bumps, changelog), branches off development, merges to main + development
-- `hotfix/*` - production emergency fixes, branches off main, merges to main + development
+- `release/*` - release prep (version bumps, changelog), branches off development, merges to master + development
+- `hotfix/*` - production emergency fixes, branches off master, merges to master + development
 
 ## Branch Discipline
 
@@ -55,7 +55,7 @@ docs: add Keycloak IdP setup guide
 
 - `v1.0.0-beta.1` / `v1.0.0-rc.1` → pre-release
 - `v1.0.0` → production release (clean semver)
-- Tags on main only
+- Tags on master only
 
 ## Git Config (expected)
 
