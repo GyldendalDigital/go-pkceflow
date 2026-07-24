@@ -10,7 +10,10 @@ A framework-agnostic Go library for OIDC Authorization Code flow with PKCE (RFC 
 
 - OIDC discovery and PKCE S256 authorization code flow
 - Desktop auth via localhost callback server and system browser
+- Shared localhost callback broker (concurrent logins/logout, no port conflicts)
 - Mobile auth via deep links (Universal Links / App Links)
+- RP-Initiated Logout with separate, correlated post-logout redirect URIs
+- ID token claims decoding (`client.Claims()`)
 - Encrypted token persistence (AES-256-GCM filestore, pluggable interface)
 - Background token refresh with DHCP-style adaptive timing
 - Offline grace period for intermittent connectivity
@@ -74,6 +77,21 @@ go run ./examples/cli \
 
 This opens a menu for login, logout, token inspection, and status display.
 See [`examples/cli/main.go`](examples/cli/main.go) for the complete source.
+
+To try a distinct, separately registered post-logout redirect URI, add
+`--logout-path=/logout` (and register that URI with your IdP).
+
+## Documentation
+
+New to OAuth/OIDC or setting up an IdP for the first time? Start here:
+
+| Guide | What it covers |
+|-------|----------------|
+| [How it works](docs/how-it-works.md) | Plain-language explanation of PKCE, the flow, tokens, and what the library does and does not solve |
+| [Keycloak setup](docs/idp-setup-keycloak.md) | Run Keycloak locally and configure a public client, field by field |
+| [Auth0 setup](docs/idp-setup-auth0.md) | Configure a hosted Native application (plus an Entra ID note) |
+| [Mobile deep linking](docs/mobile-deep-linking.md) | Universal Links / App Links / custom schemes and wiring `DeliverURL` |
+| [Architecture](docs/architecture.md) | Internal design, interfaces, token lifecycle |
 
 ## Packages
 

@@ -37,6 +37,12 @@ The library is built around three focused interfaces:
 - `StartAuthFlow(ctx, authURL) (callbackURL, error)` -- Opens auth URL, returns the callback URL with code+state
 - `RedirectURI() string` -- Returns the redirect URI registered with the IdP
 
+**LogoutFlowHandler** (optional) -- Extends a handler to support RP-Initiated Logout with a separately registered post-logout redirect URI.
+- `StartLogoutFlow(ctx, logoutURL) (callbackURL, error)` -- Opens the end-session URL, returns the post-logout callback URL
+- `PostLogoutRedirectURI() string` -- Returns the post_logout_redirect_uri (empty means "reuse the login redirect URI")
+
+When a handler does not implement this interface, `Logout` falls back to `StartAuthFlow` with the login `RedirectURI` and a fresh `state`, which covers IdPs that reuse one URI for both. The desktop handler implements it and lets callers set a distinct logout path via `SetLogoutURI` / `SetLogoutPath`.
+
 **TokenPersistence** -- Stores and retrieves encrypted token state.
 - `Save(TokenState) error`
 - `Load() (TokenState, error)`
@@ -44,6 +50,29 @@ The library is built around three focused interfaces:
 
 **EventEmitter** -- Notifies the application of auth state changes.
 - `Emit(event string, data any)`
+
+## Desktop callback broker
+
+The desktop handler does not spin up a fresh listener per flow. Instead a single
+reference-counted **broker** binds the loopback port lazily on the first flow and
+serves every in-flight flow from one mux. Each flow registers a one-shot waiter
+keyed by `path + state`; an incoming callback is routed to the matching waiter,
+so concurrent logins (or a login and a logout) never collide on the port and a
+callback only resolves the flow that started it. Unmatched or stale callbacks get
+the same success page as matched ones, so a local process cannot probe for live
+flows. The port is released a short grace period after the last flow clears.
+
+For `localhost`, the broker binds both `127.0.0.1` and `[::1]` (succeeding if at
+least one binds) so a callback is captured regardless of how the OS resolves the
+name. It never binds a wildcard address.
+
+## Reading ID token claims
+
+`Client.Claims()` decodes the current session's ID token into a `Claims` struct
+(standard OIDC claims plus a `Raw` map for provider-specific fields). The
+signature is not re-verified: go-oidc already verified it during the token
+exchange, so this only inspects an already-trusted token. Access tokens are
+never decoded because they are opaque to clients per RFC 6750.
 
 ## Auth Flow (PKCE S256)
 
