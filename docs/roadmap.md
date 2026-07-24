@@ -74,6 +74,7 @@ Current status: **Early development** (pre-release)
 - [x] Always-on OIDC nonce (send + constant-time validate against ID token claim)
 - [x] Mobile logout parity (mobileflow implements LogoutFlowHandler)
 - [x] Token storage security model + bring-your-own TokenPersistence guidance
+- [x] Council review hardening: refresh errors classified as permanent (EventSessionExpired fires on revoked tokens), EventInitFailed emitted, unused API removed, Windows browser opener, config/URL validation
 
 ### M9: wails-pkceflow Wrapper
 > Wails v3 service adapter and event bridge.
