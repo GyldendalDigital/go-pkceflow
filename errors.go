@@ -19,6 +19,10 @@ var (
 	// ErrFlowCancelled is returned when the auth flow is cancelled,
 	// either by context cancellation or user action.
 	ErrFlowCancelled = errors.New("pkceflow: auth flow cancelled")
+
+	// ErrNotAuthenticated is returned by methods that require an authenticated
+	// session (e.g., Claims) when no ID token is available.
+	ErrNotAuthenticated = errors.New("pkceflow: not authenticated (no ID token available)")
 )
 
 // AuthError represents an OAuth2/OIDC error returned by the identity provider.

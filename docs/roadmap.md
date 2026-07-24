@@ -55,11 +55,18 @@ Current status: **Early development** (pre-release)
 - [x] Event bus utilities (DeferredEventBus, NoopEventBus)
 - [x] Background refresh loop (DHCP-style timing)
 
-### M8: Integration
-> First working end-to-end desktop login.
+### M8: Integration ✓
+> First working end-to-end desktop login, hardened for real-world IdPs.
 
-- [ ] End-to-end integration test
-- [ ] Package documentation (doc.go files)
+- [x] End-to-end integration test
+- [x] Package documentation (doc.go files)
+- [x] Integration example CLI
+- [x] Logout state correlation + optional LogoutFlowHandler
+- [x] Desktop shared callback broker (path+state routing, grace shutdown)
+- [x] Desktop separate login/logout redirect URIs
+- [x] ID token claims helper (Claims, DecodeIDToken, Client.Claims)
+- [x] CLI logout flags + claims helper
+- [x] Docs: how-it-works (ELI5), Keycloak POC, Auth0, mobile deep linking
 
 ### M9: wails-pkceflow Wrapper
 > Wails v3 service adapter and event bridge.
