@@ -34,7 +34,7 @@ func (c *Client) refresh(ctx context.Context, snapshot *TokenState) (TokenState,
 
 	newToken, err := src.Token()
 	if err != nil {
-		return TokenState{}, fmt.Errorf("pkceflow: token refresh failed: %w", err)
+		return TokenState{}, fmt.Errorf("pkceflow: token refresh failed: %w", asAuthError(err))
 	}
 
 	// Preserve new refresh token; fall back to old if absent

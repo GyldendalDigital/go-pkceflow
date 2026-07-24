@@ -68,20 +68,3 @@ type EventEmitter interface {
 	// Emit sends a named event with optional associated data.
 	Emit(event string, data any)
 }
-
-// EventListener subscribes to auth lifecycle events.
-type EventListener interface {
-	// On registers a handler for the named event. Returns an unsubscribe function.
-	On(event string, handler func(data any)) func()
-}
-
-// EventBus combines event emission and subscription.
-type EventBus interface {
-	EventEmitter
-	EventListener
-}
-
-// BrowserOpener is a function that opens a URL in the user's default browser.
-// Used by desktopflow.Handler; consumers can override with their own implementation
-// (e.g., Wails app.Browser.OpenURL).
-type BrowserOpener func(url string) error

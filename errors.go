@@ -3,6 +3,8 @@ package pkceflow
 import (
 	"errors"
 	"fmt"
+
+	"golang.org/x/oauth2"
 )
 
 // Sentinel errors returned by Client methods.
@@ -62,4 +64,21 @@ func IsPermanentError(err error) bool {
 		return permanentErrorCodes[authErr.Code]
 	}
 	return false
+}
+
+// asAuthError converts an OAuth2 token-endpoint error into an *AuthError,
+// preserving the OAuth2 error code (RFC 6749 section 5.2) so IsPermanentError
+// and consumer inspection work uniformly across the login and refresh paths.
+//
+// golang.org/x/oauth2 returns *oauth2.RetrieveError for token-endpoint failures;
+// its Error() can include the raw response body, so converting here also stops
+// that body from propagating into logs and consumer errors. Errors without an
+// OAuth2 error code (network failures, non-standard responses) are returned
+// unchanged so their original context is preserved.
+func asAuthError(err error) error {
+	var re *oauth2.RetrieveError
+	if errors.As(err, &re) && re.ErrorCode != "" {
+		return &AuthError{Code: re.ErrorCode, Message: re.ErrorDescription}
+	}
+	return err
 }

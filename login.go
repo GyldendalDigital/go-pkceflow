@@ -105,7 +105,7 @@ func (c *Client) Login(ctx context.Context) error {
 
 	token, err := oauthCfg.Exchange(ctx, code, exchangeOpts...)
 	if err != nil {
-		return fmt.Errorf("pkceflow: token exchange failed: %w", err)
+		return fmt.Errorf("pkceflow: token exchange failed: %w", asAuthError(err))
 	}
 
 	// Extract and validate ID token
