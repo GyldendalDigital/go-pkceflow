@@ -9,7 +9,7 @@ When executing tasks from the work breakdown (docs/work-breakdown.md or equivale
 ## Before Starting a Task
 
 1. Read the task specification (ID, files, acceptance criteria, dependencies)
-2. Verify all dependency tasks are complete (merged to development)
+2. Verify all dependency tasks are complete (merged to master)
 3. Create a branch with the suggested name from the task spec
 4. If the task references the reference implementation, read those files first
 
