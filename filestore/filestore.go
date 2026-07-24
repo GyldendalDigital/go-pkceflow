@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	pkceflow "github.com/GyldendalDigital/go-pkceflow"
 )
@@ -111,4 +112,37 @@ func deriveKey(appID, dir string) ([32]byte, error) {
 
 	// Fallback: use a persisted random key file.
 	return fallbackKey(filepath.Join(dir, keyFileName))
+}
+
+// DefaultDir returns the recommended per-user directory for this application's
+// encrypted token file, hiding platform differences. It is os.UserConfigDir
+// joined with appID:
+//
+//   - Linux:   $XDG_CONFIG_HOME/<appID>  (or ~/.config/<appID>)
+//   - macOS:   ~/Library/Application Support/<appID>
+//   - Windows: %AppData%\<appID>
+//
+// It does not create the directory; New and NewDefault do. On mobile,
+// os.UserConfigDir does not resolve to the application sandbox, so mobile
+// consumers should pass their platform-provided sandbox path to New instead.
+func DefaultDir(appID string) (string, error) {
+	if strings.TrimSpace(appID) == "" {
+		return "", fmt.Errorf("filestore: appID is required")
+	}
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("filestore: resolve user config dir: %w", err)
+	}
+	return filepath.Join(base, appID), nil
+}
+
+// NewDefault creates a Store in DefaultDir(appID), the common desktop case, so
+// the consumer does not compute a platform-specific path. On mobile, use New
+// with the platform-provided sandbox directory instead.
+func NewDefault(appID string) (*Store, error) {
+	dir, err := DefaultDir(appID)
+	if err != nil {
+		return nil, err
+	}
+	return New(appID, dir)
 }

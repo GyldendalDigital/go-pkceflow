@@ -3,6 +3,7 @@ package filestore
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -226,5 +227,59 @@ func TestFilePermissions(t *testing.T) {
 	perm := info.Mode().Perm()
 	if perm != filePerm {
 		t.Errorf("file permission: got %o, want %o", perm, filePerm)
+	}
+}
+
+func TestDefaultDir(t *testing.T) {
+	if _, err := DefaultDir(""); err == nil {
+		t.Error("empty appID should return an error")
+	}
+	if _, err := DefaultDir("  "); err == nil {
+		t.Error("whitespace appID should return an error")
+	}
+
+	base, err := os.UserConfigDir()
+	if err != nil {
+		t.Skipf("no user config dir on this platform: %v", err)
+	}
+	got, err := DefaultDir("com.example.app")
+	if err != nil {
+		t.Fatalf("DefaultDir: %v", err)
+	}
+	if want := filepath.Join(base, "com.example.app"); got != want {
+		t.Errorf("DefaultDir = %q, want %q", got, want)
+	}
+}
+
+func TestNewDefault_EmptyAppID(t *testing.T) {
+	if _, err := NewDefault(""); err == nil {
+		t.Error("NewDefault(\"\") should return an error")
+	}
+}
+
+func TestNewDefault_CreatesStore(t *testing.T) {
+	tmp := t.TempDir()
+	switch runtime.GOOS {
+	case "windows":
+		t.Setenv("AppData", tmp)
+	case "darwin":
+		t.Setenv("HOME", tmp)
+	default:
+		t.Setenv("XDG_CONFIG_HOME", tmp)
+	}
+
+	store, err := NewDefault("com.example.pkceflow-test")
+	if err != nil {
+		t.Fatalf("NewDefault: %v", err)
+	}
+	if err := store.Save(pkceflow.TokenState{AccessToken: "abc"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.AccessToken != "abc" {
+		t.Errorf("round trip via NewDefault failed: %+v", got)
 	}
 }
