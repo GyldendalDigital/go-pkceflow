@@ -36,6 +36,7 @@ type FakeIDPServer struct {
 	codes         map[string]*pendingCode // authorization code -> pending exchange
 	refreshTokens map[string]*tokenState  // refresh token -> associated state
 	errorQueue    []string                // queued errors to return on next token request
+	stickyError   string                  // when set, every token request returns this error
 	forceNonce    *string                 // when set, overrides the ID token nonce claim
 	nowFunc       func() time.Time
 }
@@ -156,6 +157,24 @@ func (s *FakeIDPServer) QueueError(code string) {
 	s.errorQueue = append(s.errorQueue, code)
 }
 
+// SetTokenError makes every token request fail with the given OAuth error code
+// until ClearTokenError is called. Use it to model a persistent condition such
+// as a revoked refresh token, which a one-shot QueueError cannot represent
+// because the oauth2 client may retry the token request (for example while
+// probing the client authentication style). Passing an empty string clears it.
+func (s *FakeIDPServer) SetTokenError(code string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stickyError = code
+}
+
+// ClearTokenError removes any persistent token error set via SetTokenError.
+func (s *FakeIDPServer) ClearTokenError() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stickyError = ""
+}
+
 // SetAccessTTL changes the access token lifetime for subsequent token responses.
 func (s *FakeIDPServer) SetAccessTTL(d time.Duration) {
 	s.mu.Lock()
@@ -243,6 +262,12 @@ func (s *FakeIDPServer) handleToken(w http.ResponseWriter, r *http.Request) {
 
 	// Check for queued errors
 	s.mu.Lock()
+	if s.stickyError != "" {
+		code := s.stickyError
+		s.mu.Unlock()
+		tokenError(w, code, "simulated persistent error")
+		return
+	}
 	if len(s.errorQueue) > 0 {
 		errCode := s.errorQueue[0]
 		s.errorQueue = s.errorQueue[1:]

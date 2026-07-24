@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	"golang.org/x/oauth2"
 )
 
 func TestAuthError_Error(t *testing.T) {
@@ -103,4 +105,42 @@ func TestIsPermanentError(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAsAuthError(t *testing.T) {
+	t.Run("oauth2 RetrieveError converts to AuthError", func(t *testing.T) {
+		re := &oauth2.RetrieveError{
+			ErrorCode:        "invalid_grant",
+			ErrorDescription: "token revoked",
+		}
+		wrapped := fmt.Errorf("pkceflow: token refresh failed: %w", asAuthError(re))
+
+		var authErr *AuthError
+		if !errors.As(wrapped, &authErr) {
+			t.Fatalf("expected *AuthError in chain, got %v", wrapped)
+		}
+		if authErr.Code != "invalid_grant" {
+			t.Errorf("Code = %q, want invalid_grant", authErr.Code)
+		}
+		if authErr.Message != "token revoked" {
+			t.Errorf("Message = %q, want token revoked", authErr.Message)
+		}
+		if !IsPermanentError(wrapped) {
+			t.Error("IsPermanentError should be true for a converted invalid_grant")
+		}
+	})
+
+	t.Run("RetrieveError without code is returned unchanged", func(t *testing.T) {
+		re := &oauth2.RetrieveError{}
+		if got := asAuthError(re); got != error(re) {
+			t.Errorf("expected original error, got %v", got)
+		}
+	})
+
+	t.Run("non-oauth2 error is returned unchanged", func(t *testing.T) {
+		orig := errors.New("network timeout")
+		if got := asAuthError(orig); got != orig {
+			t.Errorf("expected original error, got %v", got)
+		}
+	})
 }

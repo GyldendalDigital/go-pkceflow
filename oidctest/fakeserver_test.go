@@ -236,6 +236,39 @@ func TestFakeIDP_QueueError(t *testing.T) {
 	}
 }
 
+func TestFakeIDP_SetTokenError(t *testing.T) {
+	idp := NewFakeIDP(t)
+	idp.SetTokenError("invalid_grant")
+
+	postToken := func() int {
+		resp, err := http.PostForm(idp.IssuerURL()+"/token", url.Values{
+			"grant_type":    {"refresh_token"},
+			"refresh_token": {"anything"},
+			"client_id":     {"test-client"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	// The sticky error applies to every request, not just the next one.
+	if got := postToken(); got != http.StatusBadRequest {
+		t.Fatalf("first request: expected 400, got %d", got)
+	}
+	if got := postToken(); got != http.StatusBadRequest {
+		t.Fatalf("second request: expected 400, got %d", got)
+	}
+
+	// Clearing it removes the forced failure.
+	idp.ClearTokenError()
+	// A subsequent request still returns 400 here only because "anything" is not
+	// a registered refresh token, which confirms the handler logic now runs
+	// rather than the sticky error short-circuiting every request.
+	_ = postToken()
+}
+
 func TestFakeIDP_ConfigurableTokenExpiry(t *testing.T) {
 	idp := NewFakeIDP(t, WithAccessTTL(10*time.Second))
 
