@@ -1,6 +1,9 @@
 package pkceflow
 
-import "log/slog"
+import (
+	"log/slog"
+	"net/http"
+)
 
 // Option configures optional Client dependencies.
 // Use With* functions to create options.
@@ -8,9 +11,10 @@ type Option func(*clientOptions)
 
 // clientOptions holds the optional dependencies for a Client.
 type clientOptions struct {
-	store   TokenPersistence
-	emitter EventEmitter
-	logger  *slog.Logger
+	store      TokenPersistence
+	emitter    EventEmitter
+	logger     *slog.Logger
+	httpClient *http.Client
 }
 
 // WithTokenPersistence sets the token persistence backend.
@@ -34,5 +38,22 @@ func WithEventEmitter(emitter EventEmitter) Option {
 func WithLogger(logger *slog.Logger) Option {
 	return func(o *clientOptions) {
 		o.logger = logger
+	}
+}
+
+// WithHTTPClient sets the HTTP client used for every outbound request the
+// Client makes: OIDC discovery, JWKS fetching during ID-token verification,
+// token exchange, and token refresh. Use it for corporate proxies, custom CA
+// bundles or mutual TLS, and transport tuning (connection pools, per-transport
+// timeouts).
+//
+// If not provided, the default HTTP client is used. The library never mutates
+// the client and never disables TLS verification on your behalf; supplying a
+// client that skips verification or drops redirects is your explicit choice.
+// Context deadlines (LoginTimeout, LogoutTimeout, and any ctx you pass) still
+// apply independently of the client's own Timeout.
+func WithHTTPClient(hc *http.Client) Option {
+	return func(o *clientOptions) {
+		o.httpClient = hc
 	}
 }

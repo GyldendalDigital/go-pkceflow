@@ -18,6 +18,7 @@ A framework-agnostic Go library for OIDC Authorization Code flow with PKCE (RFC 
 - Background token refresh with DHCP-style adaptive timing
 - Offline grace period for intermittent connectivity
 - Event-driven auth state notifications
+- Custom HTTP client injection (`WithHTTPClient`) for proxies, custom CA/mTLS, and transport tuning
 - Test infrastructure (`oidctest` package with FakeIDPServer) for testing without a real IdP
 - No CGo -- cross-compiles from any platform
 
