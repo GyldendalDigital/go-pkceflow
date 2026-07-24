@@ -56,10 +56,17 @@ Current status: **Early development** (pre-release)
 - [x] Background refresh loop (DHCP-style timing)
 
 ### M8: Integration
-> First working end-to-end desktop login.
+> First working end-to-end desktop login, hardened for real-world IdPs.
 
-- [ ] End-to-end integration test
-- [ ] Package documentation (doc.go files)
+- [x] End-to-end integration test
+- [x] Package documentation (doc.go files)
+- [x] Integration example CLI
+- [x] Logout state correlation + optional LogoutFlowHandler
+- [ ] Desktop shared callback broker (path+state routing, grace shutdown)
+- [ ] Desktop separate login/logout redirect URIs
+- [ ] Token claims helper (Claims, DecodeIDToken, Client.Claims)
+- [ ] CLI logout flags + claims helper
+- [ ] Docs: how-it-works (ELI5), Keycloak POC, Auth0, mobile deep linking
 
 ### M9: wails-pkceflow Wrapper
 > Wails v3 service adapter and event bridge.

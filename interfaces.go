@@ -19,6 +19,24 @@ type AuthFlowHandler interface {
 	RedirectURI() string
 }
 
+// LogoutFlowHandler is an OPTIONAL interface an AuthFlowHandler may implement to
+// run RP-Initiated Logout on a redirect URI that differs from the login redirect
+// URI (a different path, or a fully different loopback URI). IdPs commonly
+// register post_logout_redirect_uris in a list that is separate from
+// redirect_uris, so the logout callback may need a distinct URI.
+//
+// When a handler does not implement this interface, Logout falls back to
+// StartAuthFlow and RedirectURI (the same URI as login), disambiguated by state.
+type LogoutFlowHandler interface {
+	// StartLogoutFlow opens the end-session URL and waits for the post-logout
+	// callback, mirroring StartAuthFlow but for the logout redirect.
+	StartLogoutFlow(ctx context.Context, logoutURL string) (callbackURL string, err error)
+
+	// PostLogoutRedirectURI returns the URI to send as post_logout_redirect_uri.
+	// An empty string means "use the login RedirectURI".
+	PostLogoutRedirectURI() string
+}
+
 // TokenPersistence handles saving and loading token state across app restarts.
 //
 // Implementations:

@@ -2,6 +2,7 @@ package pkceflow_test
 
 import (
 	"context"
+	"net/url"
 	"testing"
 	"time"
 
@@ -191,6 +192,89 @@ func TestTokenFn(t *testing.T) {
 	token := fn()
 	if token == "" {
 		t.Error("TokenFn returned empty string")
+	}
+}
+
+// spyLogoutHandler wraps a FakeFlowHandler and additionally implements
+// LogoutFlowHandler, recording the URLs passed to each flow method.
+type spyLogoutHandler struct {
+	inner           *oidctest.FakeFlowHandler
+	postLogoutURI   string
+	startAuthURLs   []string
+	startLogoutURLs []string
+}
+
+func (s *spyLogoutHandler) StartAuthFlow(ctx context.Context, u string) (string, error) {
+	s.startAuthURLs = append(s.startAuthURLs, u)
+	return s.inner.StartAuthFlow(ctx, u)
+}
+
+func (s *spyLogoutHandler) RedirectURI() string { return s.inner.RedirectURI() }
+
+func (s *spyLogoutHandler) StartLogoutFlow(ctx context.Context, u string) (string, error) {
+	s.startLogoutURLs = append(s.startLogoutURLs, u)
+	return s.inner.StartAuthFlow(ctx, u)
+}
+
+func (s *spyLogoutHandler) PostLogoutRedirectURI() string { return s.postLogoutURI }
+
+func TestLogout_UsesLogoutFlowHandler(t *testing.T) {
+	redirectURI := "http://127.0.0.1:9999/callback"
+	idp := oidctest.NewFakeIDP(t,
+		oidctest.WithClientID("test-app"),
+		oidctest.WithRedirectURI(redirectURI),
+		oidctest.WithAccessTTL(5*time.Minute),
+	)
+	spy := &spyLogoutHandler{
+		inner:         oidctest.NewFakeFlowHandler(idp, redirectURI),
+		postLogoutURI: redirectURI,
+	}
+	store := &oidctest.MemoryStore{}
+	emitter := &oidctest.RecordingEmitter{}
+
+	client, err := pkceflow.New(pkceflow.Config{
+		IssuerURL: idp.IssuerURL(),
+		ClientID:  "test-app",
+	}, spy,
+		pkceflow.WithTokenPersistence(store),
+		pkceflow.WithEventEmitter(emitter),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if err := client.Init(context.Background()); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := client.Login(context.Background()); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if err := client.Logout(context.Background()); err != nil {
+		t.Fatalf("Logout: %v", err)
+	}
+
+	// Logout must go through StartLogoutFlow, not StartAuthFlow.
+	if len(spy.startLogoutURLs) != 1 {
+		t.Fatalf("StartLogoutFlow called %d times, want 1", len(spy.startLogoutURLs))
+	}
+
+	u, err := url.Parse(spy.startLogoutURLs[0])
+	if err != nil {
+		t.Fatalf("parse logout URL: %v", err)
+	}
+	q := u.Query()
+	if q.Get("state") == "" {
+		t.Error("logout URL missing state")
+	}
+	if got := q.Get("post_logout_redirect_uri"); got != redirectURI {
+		t.Errorf("post_logout_redirect_uri = %q, want %q", got, redirectURI)
+	}
+	if q.Get("id_token_hint") == "" {
+		t.Error("logout URL missing id_token_hint")
+	}
+
+	if !emitter.HasEvent(pkceflow.EventLoggedOut) {
+		t.Error("EventLoggedOut not emitted")
 	}
 }
 

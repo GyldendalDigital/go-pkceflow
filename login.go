@@ -38,11 +38,10 @@ func (c *Client) Login(ctx context.Context) error {
 	pkceVerifier := oauth2.GenerateVerifier()
 
 	// Generate random state for CSRF protection (32 bytes, base64url)
-	stateBytes := make([]byte, 32)
-	if _, err := rand.Read(stateBytes); err != nil {
-		return fmt.Errorf("pkceflow: failed to generate state: %w", err)
+	state, err := randomState()
+	if err != nil {
+		return err
 	}
-	state := base64.RawURLEncoding.EncodeToString(stateBytes)
 
 	// Build authorization URL
 	authOpts := []oauth2.AuthCodeOption{
@@ -131,4 +130,15 @@ func (c *Client) Login(ctx context.Context) error {
 
 	c.emitter.Emit(EventLoggedIn, nil)
 	return nil
+}
+
+// randomState generates a cryptographically random state value (32 bytes,
+// base64url-encoded) used for CSRF protection and callback correlation in both
+// the login and logout flows.
+func randomState() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("pkceflow: failed to generate state: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }

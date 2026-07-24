@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -377,10 +378,19 @@ func (s *FakeIDPServer) handleJWKS(w http.ResponseWriter, _ *http.Request) {
 }
 
 // handleEndSession simulates RP-Initiated Logout.
-// Redirects to post_logout_redirect_uri if provided.
+// Redirects to post_logout_redirect_uri if provided, echoing back the state
+// parameter as required by OIDC RP-Initiated Logout 1.0.
 func (s *FakeIDPServer) handleEndSession(w http.ResponseWriter, r *http.Request) {
 	postLogoutURI := r.URL.Query().Get("post_logout_redirect_uri")
 	if postLogoutURI != "" {
+		if state := r.URL.Query().Get("state"); state != "" {
+			if u, err := url.Parse(postLogoutURI); err == nil {
+				q := u.Query()
+				q.Set("state", state)
+				u.RawQuery = q.Encode()
+				postLogoutURI = u.String()
+			}
+		}
 		http.Redirect(w, r, postLogoutURI, http.StatusFound) //nolint:gosec // G710: intentional redirect in test OIDC server
 		return
 	}

@@ -2,6 +2,7 @@ package pkceflow
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"net/url"
 )
@@ -32,22 +33,67 @@ func (c *Client) Logout(ctx context.Context) error {
 
 	// RP-Initiated Logout if supported
 	if endSessionEndpoint != "" && idToken != "" {
-		logoutURL, err := buildLogoutURL(endSessionEndpoint, idToken, c.flow.RedirectURI())
-		if err != nil {
-			c.logger.Warn("failed to build logout URL", "error", err)
-		} else {
-			if _, err := c.flow.StartAuthFlow(ctx, logoutURL); err != nil {
-				c.logger.Warn("RP-Initiated Logout failed", "error", err)
-			}
-		}
+		c.doRPLogout(ctx, endSessionEndpoint, idToken)
 	}
 
 	c.emitter.Emit(EventLoggedOut, nil)
 	return nil
 }
 
+// doRPLogout performs RP-Initiated Logout via the flow handler. All failures are
+// logged as warnings and swallowed: local logout has already succeeded, so a
+// failed browser round-trip must not surface as a logout error.
+func (c *Client) doRPLogout(ctx context.Context, endSessionEndpoint, idToken string) {
+	// Resolve the post-logout redirect URI and the flow used to capture the
+	// callback. Handlers that support a distinct logout redirect implement
+	// LogoutFlowHandler; otherwise fall back to the login redirect and flow.
+	postLogoutURI := c.flow.RedirectURI()
+	startFlow := c.flow.StartAuthFlow
+	if lh, ok := c.flow.(LogoutFlowHandler); ok {
+		if uri := lh.PostLogoutRedirectURI(); uri != "" {
+			postLogoutURI = uri
+		}
+		startFlow = lh.StartLogoutFlow
+	}
+
+	// Generate state for CSRF protection and callback correlation.
+	state, err := randomState()
+	if err != nil {
+		c.logger.Warn("failed to generate logout state", "error", err)
+		return
+	}
+
+	logoutURL, err := buildLogoutURL(endSessionEndpoint, idToken, postLogoutURI, state)
+	if err != nil {
+		c.logger.Warn("failed to build logout URL", "error", err)
+		return
+	}
+
+	callbackURL, err := startFlow(ctx, logoutURL)
+	if err != nil {
+		c.logger.Warn("RP-Initiated Logout failed", "error", err)
+		return
+	}
+
+	// Best-effort state validation. A mismatch is logged but does not fail
+	// logout: local state is already cleared. Some IdPs do not redirect back
+	// (they show a confirmation page), in which case callbackURL is empty.
+	if callbackURL == "" {
+		return
+	}
+	parsed, perr := url.Parse(callbackURL)
+	if perr != nil {
+		c.logger.Warn("failed to parse logout callback URL", "error", perr)
+		return
+	}
+	returned := parsed.Query().Get("state")
+	if returned != "" && subtle.ConstantTimeCompare([]byte(state), []byte(returned)) != 1 {
+		c.logger.Warn("logout callback state mismatch")
+	}
+}
+
 // buildLogoutURL constructs the RP-Initiated Logout URL.
-func buildLogoutURL(endpoint, idToken, postLogoutRedirectURI string) (string, error) {
+func buildLogoutURL(endpoint, idToken, postLogoutRedirectURI, state string) (string, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return "", fmt.Errorf("pkceflow: invalid end_session_endpoint: %w", err)
@@ -55,6 +101,7 @@ func buildLogoutURL(endpoint, idToken, postLogoutRedirectURI string) (string, er
 
 	q := u.Query()
 	q.Set("id_token_hint", idToken)
+	q.Set("state", state)
 	if postLogoutRedirectURI != "" {
 		q.Set("post_logout_redirect_uri", postLogoutRedirectURI)
 	}
