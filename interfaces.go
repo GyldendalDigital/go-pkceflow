@@ -42,6 +42,14 @@ type LogoutFlowHandler interface {
 // Implementations:
 //   - filestore.Store: AES-256-GCM encrypted file (default for v1)
 //   - oidctest.MemoryStore: in-memory for testing
+//
+// The default filestore encrypts tokens at rest with AES-256-GCM. Combined with
+// per-user file permissions on desktop and the application sandbox on mobile,
+// this is sufficient for storing typical OIDC tokens, and keeps the default
+// dependency-free and CGo-free. Consumers with stricter requirements (an OS
+// keyring or Keychain, a hardware-backed keystore, or a secure enclave) can
+// implement this interface and inject it via WithTokenPersistence, with no other
+// code changes.
 type TokenPersistence interface {
 	// Save persists the token state. Called after login and token refresh.
 	Save(state TokenState) error

@@ -127,6 +127,15 @@ additional TokenPersistence implementation without changing the core API.
 - Key derivation: SHA-256(appID + machineID); fallback to persisted random key file
 - Redirect URIs: loopback IP literal per RFC 8252 (desktop), claimed HTTPS (mobile)
 
+Token storage security model: the default filestore encrypts tokens with
+AES-256-GCM and relies on per-user file permissions (desktop) or the application
+sandbox (mobile). This is sufficient for typical OIDC tokens and keeps the
+default dependency-free and CGo-free. Consumers needing stricter handling (an OS
+keyring or Keychain, a hardware-backed keystore, or a secure enclave) implement
+the `TokenPersistence` interface and inject it via `WithTokenPersistence`; no
+other change is required. An OS-native store may also be added to the library as
+an additional backend later without breaking the API.
+
 ## IdP Compatibility
 
 Designed and tested for:
