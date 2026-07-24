@@ -31,6 +31,21 @@ func TestConfig_Validate_RequiredFields(t *testing.T) {
 			config:  Config{IssuerURL: "https://idp.example.com", ClientID: "  "},
 			wantErr: "ClientID is required",
 		},
+		{
+			name:    "IssuerURL without scheme",
+			config:  Config{IssuerURL: "idp.example.com", ClientID: "my-app"},
+			wantErr: "absolute http(s) URL",
+		},
+		{
+			name:    "IssuerURL with non-http scheme",
+			config:  Config{IssuerURL: "ftp://idp.example.com", ClientID: "my-app"},
+			wantErr: "absolute http(s) URL",
+		},
+		{
+			name:    "IssuerURL with scheme but no host",
+			config:  Config{IssuerURL: "https://", ClientID: "my-app"},
+			wantErr: "absolute http(s) URL",
+		},
 	}
 
 	for _, tt := range tests {

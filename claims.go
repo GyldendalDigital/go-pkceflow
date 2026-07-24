@@ -72,25 +72,25 @@ func DecodeIDToken(raw string) (Claims, error) {
 		return Claims{}, fmt.Errorf("pkceflow: decoding ID token payload: %w", err)
 	}
 
-	var raw2 map[string]any
-	if err := json.Unmarshal(payload, &raw2); err != nil {
+	var claimSet map[string]any
+	if err := json.Unmarshal(payload, &claimSet); err != nil {
 		return Claims{}, fmt.Errorf("pkceflow: parsing ID token claims: %w", err)
 	}
 
 	claims := Claims{
-		Subject:           stringClaim(raw2, "sub"),
-		Name:              stringClaim(raw2, "name"),
-		GivenName:         stringClaim(raw2, "given_name"),
-		FamilyName:        stringClaim(raw2, "family_name"),
-		PreferredUsername: stringClaim(raw2, "preferred_username"),
-		Email:             stringClaim(raw2, "email"),
-		EmailVerified:     boolClaim(raw2, "email_verified"),
-		Issuer:            stringClaim(raw2, "iss"),
-		Audience:          audienceClaim(raw2, "aud"),
-		ExpiresAt:         timeClaim(raw2, "exp"),
-		IssuedAt:          timeClaim(raw2, "iat"),
-		AuthTime:          timeClaim(raw2, "auth_time"),
-		Raw:               raw2,
+		Subject:           stringClaim(claimSet, "sub"),
+		Name:              stringClaim(claimSet, "name"),
+		GivenName:         stringClaim(claimSet, "given_name"),
+		FamilyName:        stringClaim(claimSet, "family_name"),
+		PreferredUsername: stringClaim(claimSet, "preferred_username"),
+		Email:             stringClaim(claimSet, "email"),
+		EmailVerified:     boolClaim(claimSet, "email_verified"),
+		Issuer:            stringClaim(claimSet, "iss"),
+		Audience:          audienceClaim(claimSet, "aud"),
+		ExpiresAt:         timeClaim(claimSet, "exp"),
+		IssuedAt:          timeClaim(claimSet, "iat"),
+		AuthTime:          timeClaim(claimSet, "auth_time"),
+		Raw:               claimSet,
 	}
 	return claims, nil
 }

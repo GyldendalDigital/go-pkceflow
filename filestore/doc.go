@@ -21,6 +21,14 @@
 // tokens. This default deliberately favours a dependency-free, CGo-free,
 // cross-platform implementation over an OS credential manager.
 //
+// The encryption primarily protects tokens against disk or backup exposure and
+// access by other user accounts. It is not a strong defence against an attacker
+// already running as the same OS user: the Linux machine ID is world-readable
+// and the fallback key file sits beside the token file under the same 0600
+// permissions, so a same-user attacker can derive or read the key. Threat
+// models that include same-user compromise should use a hardware-backed or OS
+// keyring implementation (see below).
+//
 // Consumers with stricter requirements (regulatory constraints, hardware-backed
 // key storage, an OS keyring or Keychain, or a secure enclave) can implement the
 // pkceflow.TokenPersistence interface themselves and inject it with

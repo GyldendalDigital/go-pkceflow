@@ -3,6 +3,7 @@ package pkceflow
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -50,6 +51,11 @@ type Config struct {
 func (c *Config) Validate() error {
 	if strings.TrimSpace(c.IssuerURL) == "" {
 		return errors.New("pkceflow: Config.IssuerURL is required")
+	}
+	if u, err := url.Parse(c.IssuerURL); err != nil {
+		return fmt.Errorf("pkceflow: Config.IssuerURL is not a valid URL: %w", err)
+	} else if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("pkceflow: Config.IssuerURL must be an absolute http(s) URL, got %q", c.IssuerURL)
 	}
 	if strings.TrimSpace(c.ClientID) == "" {
 		return errors.New("pkceflow: Config.ClientID is required")
