@@ -62,7 +62,7 @@ Current status: **Early development** (pre-release)
 - [x] Package documentation (doc.go files)
 - [x] Integration example CLI
 - [x] Logout state correlation + optional LogoutFlowHandler
-- [ ] Desktop shared callback broker (path+state routing, grace shutdown)
+- [x] Desktop shared callback broker (path+state routing, grace shutdown)
 - [ ] Desktop separate login/logout redirect URIs
 - [ ] Token claims helper (Claims, DecodeIDToken, Client.Claims)
 - [ ] CLI logout flags + claims helper
