@@ -64,8 +64,8 @@ Current status: **Early development** (pre-release)
 - [x] Logout state correlation + optional LogoutFlowHandler
 - [x] Desktop shared callback broker (path+state routing, grace shutdown)
 - [x] Desktop separate login/logout redirect URIs
-- [x] ID token claims helper (Claims, DecodeIDToken, Client.Claims) (Claims, DecodeIDToken, Client.Claims)
-- [ ] CLI logout flags + claims helper
+- [x] ID token claims helper (Claims, DecodeIDToken, Client.Claims)
+- [x] CLI logout flags + claims helper
 - [ ] Docs: how-it-works (ELI5), Keycloak POC, Auth0, mobile deep linking
 
 ### M9: wails-pkceflow Wrapper

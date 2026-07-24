@@ -12,8 +12,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -31,6 +29,8 @@ func main() {
 	port := flag.Int("port", 15051, "Localhost callback port (must be registered with IdP)")
 	callbackPath := flag.String("callback-path", "/callback", "Callback path on the localhost server")
 	redirectURI := flag.String("redirect-uri", "", "Full redirect URI (overrides --port and --callback-path)")
+	logoutURI := flag.String("logout-uri", "", "Distinct post-logout redirect URI (loopback, same host:port as login, different path)")
+	logoutPath := flag.String("logout-path", "", "Distinct callback path for logout on the same host and port as login")
 	scopes := flag.String("scopes", "", "Comma-separated scopes (default: openid,profile,email,offline_access)")
 	graceDays := flag.Int("grace-days", 0, "Offline grace period in days (0 = disabled)")
 	dataDir := flag.String("data-dir", "", "Token storage directory (default: ~/.config/pkceflow-example)")
@@ -46,6 +46,11 @@ func main() {
 
 	if *redirectURI != "" && (*callbackPath != "/callback" || isFlagSet("port")) {
 		fmt.Fprintln(os.Stderr, "Error: --redirect-uri cannot be combined with --port or --callback-path")
+		os.Exit(1)
+	}
+
+	if *logoutURI != "" && *logoutPath != "" {
+		fmt.Fprintln(os.Stderr, "Error: --logout-uri and --logout-path are mutually exclusive")
 		os.Exit(1)
 	}
 
@@ -80,6 +85,21 @@ func main() {
 		}
 	}
 
+	// Configure a distinct logout callback when the IdP registers a separate
+	// post_logout_redirect_uri. Both default to the login redirect URI.
+	switch {
+	case *logoutURI != "":
+		if err := handler.SetLogoutURI(*logoutURI); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case *logoutPath != "":
+		if err := handler.SetLogoutPath(*logoutPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	// Build config
 	cfg := pkceflow.Config{
 		IssuerURL: *issuer,
@@ -108,6 +128,9 @@ func main() {
 
 	// Initialize OIDC discovery
 	fmt.Printf("Redirect URI: %s (register this with your IdP)\n", handler.RedirectURI())
+	if handler.PostLogoutRedirectURI() != handler.RedirectURI() {
+		fmt.Printf("Post-logout redirect URI: %s (register this too)\n", handler.PostLogoutRedirectURI())
+	}
 	fmt.Printf("Discovering OIDC configuration from %s...\n", *issuer)
 	if err := client.Init(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: OIDC discovery failed: %v\n", err)
@@ -155,7 +178,7 @@ func main() {
 			printStatus(client, store)
 
 		case "t":
-			printTokenInfo(client, store, ctx)
+			printTokenInfo(client, ctx)
 
 		case "r":
 			fmt.Println("Attempting manual token refresh...")
@@ -219,7 +242,7 @@ func printStatus(client *pkceflow.Client, store pkceflow.TokenPersistence) {
 	fmt.Println("-------------------")
 }
 
-func printTokenInfo(client *pkceflow.Client, store pkceflow.TokenPersistence, ctx context.Context) {
+func printTokenInfo(client *pkceflow.Client, ctx context.Context) {
 	token := client.AccessToken(ctx)
 	if token == "" {
 		fmt.Println("No valid access token available.")
@@ -233,53 +256,35 @@ func printTokenInfo(client *pkceflow.Client, store pkceflow.TokenPersistence, ct
 		fmt.Printf("Access token: %s (%d chars)\n", token, len(token))
 	}
 
-	// Decode ID token claims (already verified at login, just reading payload)
-	state, _ := store.Load()
-	if state.IDToken != "" {
-		claims := decodeJWTPayload(state.IDToken)
-		if claims != nil {
-			fmt.Println("\n--- ID Token Claims ---")
-			for k, v := range claims {
-				// Skip raw token values and internal claims
-				switch k {
-				case "at_hash", "c_hash", "nonce", "sid":
-					continue
-				}
-				fmt.Printf("  %s: %v\n", k, v)
-			}
-			fmt.Println("-----------------------")
-		}
-	}
-}
-
-// decodeJWTPayload decodes the payload segment of a JWT without verification.
-// Returns nil if the token is not a valid JWT format.
-func decodeJWTPayload(token string) map[string]any {
-	parts := strings.SplitN(token, ".", 3)
-	if len(parts) != 3 {
-		return nil
-	}
-
-	// Base64url decode the payload (middle segment)
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	// Read the ID token claims via the library helper (already verified at login).
+	claims, err := client.Claims()
 	if err != nil {
-		return nil
+		fmt.Printf("\nNo ID token claims: %v\n", err)
+		return
 	}
 
-	var claims map[string]any
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return nil
+	fmt.Println("\n--- ID Token Claims ---")
+	fmt.Printf("  subject:   %s\n", claims.Subject)
+	if claims.Name != "" {
+		fmt.Printf("  name:      %s\n", claims.Name)
 	}
-
-	// Convert numeric timestamps to readable format
-	for _, key := range []string{"exp", "iat", "auth_time"} {
-		if v, ok := claims[key].(float64); ok {
-			t := time.Unix(int64(v), 0)
-			claims[key] = t.Format("2006-01-02 15:04:05")
-		}
+	if claims.PreferredUsername != "" {
+		fmt.Printf("  username:  %s\n", claims.PreferredUsername)
 	}
-
-	return claims
+	if claims.Email != "" {
+		fmt.Printf("  email:     %s (verified: %v)\n", claims.Email, claims.EmailVerified)
+	}
+	fmt.Printf("  issuer:    %s\n", claims.Issuer)
+	if len(claims.Audience) > 0 {
+		fmt.Printf("  audience:  %s\n", strings.Join(claims.Audience, ", "))
+	}
+	if !claims.ExpiresAt.IsZero() {
+		fmt.Printf("  expires:   %s\n", claims.ExpiresAt.Format("2006-01-02 15:04:05"))
+	}
+	if !claims.IssuedAt.IsZero() {
+		fmt.Printf("  issued:    %s\n", claims.IssuedAt.Format("2006-01-02 15:04:05"))
+	}
+	fmt.Println("-----------------------")
 }
 
 // isFlagSet reports whether a flag was explicitly set on the command line.
