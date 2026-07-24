@@ -14,7 +14,7 @@ go-pkceflow                         Core library (framework-agnostic)
   errors.go                         Sentinel errors, AuthError type
   state.go                          TokenState, AuthStatusResult
   refresh.go                        Token refresh (single-shot + background loop)
-  options.go                        Functional options (WithLogger, WithTokenPersistence, WithEventEmitter)
+  options.go                        Functional options (WithLogger, WithTokenPersistence, WithEventEmitter, WithHTTPClient)
   claims.go                         ID token claims decoding (Claims, DecodeIDToken)
   desktopflow/                      Localhost callback broker + system browser (implements AuthFlowHandler, LogoutFlowHandler)
   mobileflow/                       Channel-based handler for deep link callbacks

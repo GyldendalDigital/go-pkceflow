@@ -3,7 +3,9 @@ package pkceflow_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
@@ -543,5 +545,70 @@ func TestRefreshLoop_PermanentError_StaysInGrace(t *testing.T) {
 
 	if emitter.HasEvent(pkceflow.EventSessionExpired) {
 		t.Error("EventSessionExpired emitted while still within grace period")
+	}
+}
+
+// countingTransport records the request paths that pass through it.
+type countingTransport struct {
+	mu   sync.Mutex
+	hits map[string]int
+	base http.RoundTripper
+}
+
+func (t *countingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.mu.Lock()
+	t.hits[req.URL.Path]++
+	t.mu.Unlock()
+	return t.base.RoundTrip(req)
+}
+
+func (t *countingTransport) count(path string) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.hits[path]
+}
+
+func TestWithHTTPClient_RoutesLibraryHTTP(t *testing.T) {
+	redirectURI := "http://127.0.0.1:9999/callback"
+	idp := oidctest.NewFakeIDP(t,
+		oidctest.WithClientID("test-app"),
+		oidctest.WithRedirectURI(redirectURI),
+		oidctest.WithAccessTTL(5*time.Second), // already past the 30s buffer, so AccessToken refreshes
+	)
+
+	ct := &countingTransport{hits: map[string]int{}, base: http.DefaultTransport}
+	hc := &http.Client{Transport: ct}
+
+	handler := oidctest.NewFakeFlowHandler(idp, redirectURI)
+	client, err := pkceflow.New(pkceflow.Config{
+		IssuerURL: idp.IssuerURL(),
+		ClientID:  "test-app",
+	}, handler,
+		pkceflow.WithTokenPersistence(&oidctest.MemoryStore{}),
+		pkceflow.WithHTTPClient(hc),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := client.Init(ctx); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := client.Login(ctx); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	// The access token is already beyond the 30s freshness buffer, so this
+	// triggers a refresh through the same client.
+	_ = client.AccessToken(ctx)
+
+	if got := ct.count("/.well-known/openid-configuration"); got == 0 {
+		t.Error("discovery did not use the custom HTTP client")
+	}
+	if got := ct.count("/token"); got < 2 {
+		t.Errorf("token endpoint via custom client = %d, want >=2 (exchange + refresh)", got)
+	}
+	if got := ct.count("/jwks"); got == 0 {
+		t.Error("JWKS verification did not use the custom HTTP client")
 	}
 }

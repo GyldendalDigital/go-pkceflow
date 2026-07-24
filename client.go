@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -21,6 +22,8 @@ type Client struct {
 	store   TokenPersistence
 	emitter EventEmitter
 	logger  *slog.Logger
+
+	httpClient *http.Client // nil = library default; routes all outbound HTTP
 
 	mu       sync.Mutex
 	state    TokenState
@@ -62,6 +65,8 @@ func New(cfg Config, flow AuthFlowHandler, opts ...Option) (*Client, error) { //
 		emitter: options.emitter,
 		logger:  options.logger,
 	}
+
+	c.httpClient = options.httpClient
 
 	if c.store == nil {
 		c.store = &memoryStore{}
@@ -175,7 +180,7 @@ func (c *Client) RestoreSession() bool {
 // Init failure is non-fatal: the app can work offline with cached tokens.
 // Idempotent: calling Init() again re-discovers.
 func (c *Client) Init(ctx context.Context) error {
-	provider, err := oidc.NewProvider(ctx, c.config.IssuerURL)
+	provider, err := oidc.NewProvider(c.httpContext(ctx), c.config.IssuerURL)
 	if err != nil {
 		c.emitter.Emit(EventInitFailed, nil)
 		return fmt.Errorf("pkceflow: OIDC discovery failed for %q: %w", c.config.IssuerURL, err)
@@ -207,4 +212,16 @@ func (c *Client) Init(ctx context.Context) error {
 // initialized reports whether Init() has been called successfully.
 func (c *Client) initialized() bool {
 	return c.provider != nil
+}
+
+// httpContext returns ctx wrapped so that go-oidc and golang.org/x/oauth2 use
+// the configured HTTP client for discovery, JWKS verification, token exchange,
+// and refresh. oidc.ClientContext stores the client under the oauth2.HTTPClient
+// context key, which both libraries read. When no client is configured it
+// returns ctx unchanged (library default HTTP client).
+func (c *Client) httpContext(ctx context.Context) context.Context {
+	if c.httpClient == nil {
+		return ctx
+	}
+	return oidc.ClientContext(ctx, c.httpClient)
 }

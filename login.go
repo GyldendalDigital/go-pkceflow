@@ -34,6 +34,10 @@ func (c *Client) Login(ctx context.Context) error {
 		defer cancel()
 	}
 
+	// Route token exchange and ID-token (JWKS) verification through the
+	// configured HTTP client, if any.
+	ctx = c.httpContext(ctx)
+
 	// Generate PKCE verifier
 	pkceVerifier := oauth2.GenerateVerifier()
 

@@ -26,6 +26,9 @@ func (c *Client) refresh(ctx context.Context, snapshot *TokenState) (TokenState,
 	oauthCfg := *c.oauth2
 	c.mu.Unlock()
 
+	// Route the refresh through the configured HTTP client, if any.
+	ctx = c.httpContext(ctx)
+
 	// Use oauth2.TokenSource to perform the refresh
 	oldToken := &oauth2.Token{
 		RefreshToken: snapshot.RefreshToken,
