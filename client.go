@@ -1,7 +1,9 @@
 package pkceflow
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -54,11 +56,11 @@ func New(cfg Config, flow AuthFlowHandler, opts ...Option) (*Client, error) {
 	}
 
 	c := &Client{
-		config: cfg,
-		flow:   flow,
-		store:  options.store,
+		config:  cfg,
+		flow:    flow,
+		store:   options.store,
 		emitter: options.emitter,
-		logger: options.logger,
+		logger:  options.logger,
 	}
 
 	if c.store == nil {
@@ -110,4 +112,98 @@ func (noopEmitter) Emit(_ string, _ any) {}
 // now returns the current time. Can be overridden in tests.
 func (c *Client) now() time.Time {
 	return time.Now()
+}
+
+// tokenExpiryBuffer is subtracted from the token expiry to avoid using
+// a token that expires mid-request.
+const tokenExpiryBuffer = 30 * time.Second
+
+// AuthStatus reports the current authentication state.
+// No network calls; purely based on in-memory state and config.
+func (c *Client) AuthStatus() AuthStatusResult {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.state.IsZero() {
+		return AuthStatusResult{}
+	}
+
+	now := c.now()
+	valid := now.Before(c.state.ExpiresAt.Add(-tokenExpiryBuffer))
+
+	var graceMode bool
+	var graceDaysLeft int
+
+	if !valid && c.config.GracePeriod > 0 && !c.state.LastAuthAt.IsZero() {
+		graceEnd := c.state.LastAuthAt.Add(c.config.GracePeriod)
+		if now.Before(graceEnd) {
+			graceMode = true
+			graceDaysLeft = int(time.Until(graceEnd).Hours() / 24)
+		}
+	}
+
+	return AuthStatusResult{
+		Valid:         valid,
+		GraceMode:     graceMode,
+		GraceDaysLeft: graceDaysLeft,
+		CanUseApp:     valid || graceMode,
+	}
+}
+
+// RestoreSession loads persisted tokens into memory.
+// Returns true if a usable session was found.
+// Does NOT require network (works before Init).
+func (c *Client) RestoreSession() bool {
+	state, err := c.store.Load()
+	if err != nil {
+		c.logger.Warn("failed to load persisted session", "error", err)
+		return false
+	}
+
+	if state.IsZero() {
+		return false
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.state = state
+	return true
+}
+
+// Init performs OIDC discovery and configures the OAuth2 client.
+// Call this after New() and optionally after RestoreSession().
+// Init failure is non-fatal: the app can work offline with cached tokens.
+// Idempotent: calling Init() again re-discovers.
+func (c *Client) Init(ctx context.Context) error {
+	provider, err := oidc.NewProvider(ctx, c.config.IssuerURL)
+	if err != nil {
+		return fmt.Errorf("pkceflow: OIDC discovery failed for %q: %w", c.config.IssuerURL, err)
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.provider = provider
+	c.verifier = provider.Verifier(&oidc.Config{ClientID: c.config.ClientID})
+	c.oauth2 = &oauth2.Config{
+		ClientID:    c.config.ClientID,
+		Endpoint:    provider.Endpoint(),
+		RedirectURL: c.flow.RedirectURI(),
+		Scopes:      c.config.Scopes,
+	}
+
+	// Extract end_session_endpoint from discovery claims (for RP-Initiated Logout)
+	var claims struct {
+		EndSessionEndpoint string `json:"end_session_endpoint"`
+	}
+	if err := provider.Claims(&claims); err == nil && claims.EndSessionEndpoint != "" {
+		c.endSessionEndpoint = claims.EndSessionEndpoint
+	}
+
+	return nil
+}
+
+// initialized reports whether Init() has been called successfully.
+func (c *Client) initialized() bool {
+	return c.provider != nil
 }
