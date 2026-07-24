@@ -46,10 +46,10 @@ func TestFakeIDP_FullRoundTrip(t *testing.T) {
 
 	authURL := idp.IssuerURL() + "/authorize?" + url.Values{
 		"client_id":             {"my-app"},
-		"redirect_uri":         {"http://127.0.0.1:0/callback"},
-		"response_type":        {"code"},
-		"state":                {"test-state-123"},
-		"code_challenge":       {challenge},
+		"redirect_uri":          {"http://127.0.0.1:0/callback"},
+		"response_type":         {"code"},
+		"state":                 {"test-state-123"},
+		"code_challenge":        {challenge},
 		"code_challenge_method": {"S256"},
 	}.Encode()
 
@@ -174,10 +174,10 @@ func TestFakeIDP_PKCERequired(t *testing.T) {
 	challenge := computeS256Challenge("correct-verifier")
 	authResp := authorizeRequest(t, idp, url.Values{
 		"client_id":             {"test-client"},
-		"redirect_uri":         {"http://127.0.0.1:0/callback"},
-		"response_type":        {"code"},
-		"state":                {"s"},
-		"code_challenge":       {challenge},
+		"redirect_uri":          {"http://127.0.0.1:0/callback"},
+		"response_type":         {"code"},
+		"state":                 {"s"},
+		"code_challenge":        {challenge},
 		"code_challenge_method": {"S256"},
 	})
 
@@ -240,7 +240,7 @@ func TestFakeIDP_ConfigurableTokenExpiry(t *testing.T) {
 	idp := NewFakeIDP(t, WithAccessTTL(10*time.Second))
 
 	authResp := authorizeRequest(t, idp, url.Values{
-		"client_id":      {"test-client"},
+		"client_id":     {"test-client"},
 		"redirect_uri":  {"http://127.0.0.1:0/callback"},
 		"response_type": {"code"},
 		"state":         {"s"},
@@ -272,7 +272,7 @@ func TestFakeIDP_RefreshTokenRotationInvalidatesOld(t *testing.T) {
 
 	// Get initial tokens
 	authResp := authorizeRequest(t, idp, url.Values{
-		"client_id":      {"test-client"},
+		"client_id":     {"test-client"},
 		"redirect_uri":  {"http://127.0.0.1:0/callback"},
 		"response_type": {"code"},
 		"state":         {"s"},

@@ -14,7 +14,7 @@ type MemoryStore struct {
 }
 
 // Save persists the token state in memory.
-func (s *MemoryStore) Save(state pkceflow.TokenState) error {
+func (s *MemoryStore) Save(state pkceflow.TokenState) error { //nolint:gocritic // hugeParam: interface requires value receiver
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state = state

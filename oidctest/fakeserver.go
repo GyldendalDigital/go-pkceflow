@@ -161,21 +161,21 @@ func (s *FakeIDPServer) now() time.Time {
 func (s *FakeIDPServer) handleDiscovery(w http.ResponseWriter, _ *http.Request) {
 	issuer := s.Server.URL
 	doc := map[string]any{
-		"issuer":                 issuer,
-		"authorization_endpoint": issuer + "/authorize",
-		"token_endpoint":         issuer + "/token",
-		"jwks_uri":               issuer + "/jwks",
-		"userinfo_endpoint":      issuer + "/userinfo",
-		"end_session_endpoint":   issuer + "/end_session",
-		"response_types_supported": []string{"code"},
-		"subject_types_supported":  []string{"public"},
+		"issuer":                                issuer,
+		"authorization_endpoint":                issuer + "/authorize",
+		"token_endpoint":                        issuer + "/token",
+		"jwks_uri":                              issuer + "/jwks",
+		"userinfo_endpoint":                     issuer + "/userinfo",
+		"end_session_endpoint":                  issuer + "/end_session",
+		"response_types_supported":              []string{"code"},
+		"subject_types_supported":               []string{"public"},
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"scopes_supported":                      []string{"openid", "profile", "email", "offline_access"},
 		"token_endpoint_auth_methods_supported": []string{"none", "client_secret_post"},
 		"code_challenge_methods_supported":      []string{"S256"},
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(doc) //nolint:errcheck
+	json.NewEncoder(w).Encode(doc) //nolint:errcheck // test server: response write errors are not actionable
 }
 
 // handleAuthorize simulates the authorization endpoint.
@@ -219,7 +219,7 @@ func (s *FakeIDPServer) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	location := fmt.Sprintf("%s%scode=%s&state=%s", redirectURI, sep, code, state)
-	http.Redirect(w, r, location, http.StatusFound)
+	http.Redirect(w, r, location, http.StatusFound) //nolint:gosec // G710: intentional redirect in test OIDC server
 }
 
 // handleToken handles token exchange (authorization_code) and refresh (refresh_token).
@@ -311,7 +311,7 @@ func (s *FakeIDPServer) handleAuthCodeExchange(w http.ResponseWriter, r *http.Re
 		"id_token":      idToken,
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck // test server: response write errors are not actionable
 }
 
 func (s *FakeIDPServer) handleRefreshExchange(w http.ResponseWriter, r *http.Request) {
@@ -357,7 +357,7 @@ func (s *FakeIDPServer) handleRefreshExchange(w http.ResponseWriter, r *http.Req
 		"id_token":      idToken,
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck // test server: response write errors are not actionable
 }
 
 // handleJWKS serves the JSON Web Key Set.
@@ -381,7 +381,7 @@ func (s *FakeIDPServer) handleJWKS(w http.ResponseWriter, _ *http.Request) {
 func (s *FakeIDPServer) handleEndSession(w http.ResponseWriter, r *http.Request) {
 	postLogoutURI := r.URL.Query().Get("post_logout_redirect_uri")
 	if postLogoutURI != "" {
-		http.Redirect(w, r, postLogoutURI, http.StatusFound)
+		http.Redirect(w, r, postLogoutURI, http.StatusFound) //nolint:gosec // G710: intentional redirect in test OIDC server
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -453,5 +453,5 @@ func tokenError(w http.ResponseWriter, code, description string) {
 
 func redirectWithError(w http.ResponseWriter, r *http.Request, redirectURI, state, code, description string) {
 	location := fmt.Sprintf("%s?error=%s&error_description=%s&state=%s", redirectURI, code, description, state)
-	http.Redirect(w, r, location, http.StatusFound)
+	http.Redirect(w, r, location, http.StatusFound) //nolint:gosec // G710: intentional redirect in test OIDC server
 }
