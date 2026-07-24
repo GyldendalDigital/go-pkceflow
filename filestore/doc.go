@@ -6,7 +6,12 @@
 //
 // Usage:
 //
-//	store, err := filestore.New("my-app", "/home/user/.config/my-app")
+//	// Desktop: resolve the per-user config dir automatically.
+//	store, err := filestore.NewDefault("com.example.my-app")
+//
+//	// Or pass an explicit directory (required on mobile: use the app sandbox).
+//	store, err := filestore.New("com.example.my-app", sandboxDir)
+//
 //	client, _ := pkceflow.New(cfg, handler, pkceflow.WithTokenPersistence(store))
 //
 // # Security
