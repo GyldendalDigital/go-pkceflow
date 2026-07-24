@@ -11,7 +11,7 @@ import (
 // It implements double-check locking: if the state has changed since the
 // snapshot was taken (another goroutine already refreshed), it returns
 // the current state without making a network call.
-func (c *Client) refresh(ctx context.Context, snapshot TokenState) (TokenState, error) {
+func (c *Client) refresh(ctx context.Context, snapshot *TokenState) (TokenState, error) {
 	c.mu.Lock()
 	// Double-check: if state changed since snapshot, someone else refreshed
 	if c.state.AccessToken != snapshot.AccessToken {

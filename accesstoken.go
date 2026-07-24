@@ -29,7 +29,7 @@ func (c *Client) AccessToken(ctx context.Context) string {
 		c.mu.Unlock()
 
 		if isInit {
-			newState, err := c.refresh(ctx, state)
+			newState, err := c.refresh(ctx, &state)
 			if err == nil {
 				return newState.AccessToken
 			}

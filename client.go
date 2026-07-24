@@ -29,8 +29,6 @@ type Client struct {
 	oauth2   *oauth2.Config
 
 	endSessionEndpoint string
-
-	refreshCancel func() // cancels the active refresh loop
 }
 
 // New creates a new Client with the given configuration and flow handler.
@@ -41,7 +39,7 @@ type Client struct {
 //   - WithTokenPersistence: default is in-memory (lost on restart)
 //   - WithEventEmitter: default is no-op (events silently dropped)
 //   - WithLogger: default is slog.Default()
-func New(cfg Config, flow AuthFlowHandler, opts ...Option) (*Client, error) {
+func New(cfg Config, flow AuthFlowHandler, opts ...Option) (*Client, error) { //nolint:gocritic // hugeParam: intentionally by value so Validate() doesn't mutate caller's copy
 	if flow == nil {
 		return nil, errors.New("pkceflow: AuthFlowHandler is required")
 	}
