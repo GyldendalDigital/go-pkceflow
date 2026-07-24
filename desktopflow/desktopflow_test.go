@@ -299,6 +299,114 @@ func TestBroker_ReusableAfterCompletion(t *testing.T) {
 	}
 }
 
+func TestCallbackKey_PathDisambiguates(t *testing.T) {
+	// Same state on different paths must produce distinct keys so a login and a
+	// logout callback never resolve each other's waiter.
+	if callbackKey("/callback", "s") == callbackKey("/logout", "s") {
+		t.Error("callbackKey collides across paths for the same state")
+	}
+	if callbackKey("/callback", "a") == callbackKey("/callback", "b") {
+		t.Error("callbackKey collides across states for the same path")
+	}
+}
+
+func TestSetLogoutPath(t *testing.T) {
+	port := 19885
+	h := New(port)
+	if err := h.SetLogoutPath("/logout"); err != nil {
+		t.Fatalf("SetLogoutPath: %v", err)
+	}
+	want := fmt.Sprintf("http://127.0.0.1:%d/logout", port)
+	if h.PostLogoutRedirectURI() != want {
+		t.Errorf("PostLogoutRedirectURI = %q, want %q", h.PostLogoutRedirectURI(), want)
+	}
+	if h.logoutPath != "/logout" {
+		t.Errorf("logoutPath = %q, want /logout", h.logoutPath)
+	}
+}
+
+func TestSetLogoutPath_RejectsRelative(t *testing.T) {
+	h := New(19886)
+	if err := h.SetLogoutPath("logout"); err == nil {
+		t.Error("expected error for path without leading slash")
+	}
+}
+
+func TestSetLogoutURI(t *testing.T) {
+	port := 19887
+	h := New(port)
+	uri := fmt.Sprintf("http://127.0.0.1:%d/post-logout", port)
+	if err := h.SetLogoutURI(uri); err != nil {
+		t.Fatalf("SetLogoutURI: %v", err)
+	}
+	if h.PostLogoutRedirectURI() != uri {
+		t.Errorf("PostLogoutRedirectURI = %q, want %q", h.PostLogoutRedirectURI(), uri)
+	}
+	if h.logoutPath != "/post-logout" {
+		t.Errorf("logoutPath = %q, want /post-logout", h.logoutPath)
+	}
+}
+
+func TestSetLogoutURI_RejectsDifferentPort(t *testing.T) {
+	h := New(19888)
+	if err := h.SetLogoutURI("http://127.0.0.1:19999/callback"); err == nil {
+		t.Error("expected error for mismatched port")
+	}
+}
+
+func TestSetLogoutURI_RejectsNonLoopback(t *testing.T) {
+	port := 19889
+	h := New(port)
+	if err := h.SetLogoutURI(fmt.Sprintf("http://example.com:%d/callback", port)); err == nil {
+		t.Error("expected error for non-loopback host")
+	}
+}
+
+func TestPostLogoutRedirectURI_DefaultsToLogin(t *testing.T) {
+	port := 19890
+	h := New(port)
+	want := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
+	if h.PostLogoutRedirectURI() != want {
+		t.Errorf("PostLogoutRedirectURI = %q, want %q", h.PostLogoutRedirectURI(), want)
+	}
+}
+
+func TestStartLogoutFlow_SeparatePath(t *testing.T) {
+	port := 19891
+	h := New(port)
+	if err := h.SetLogoutPath("/logout"); err != nil {
+		t.Fatalf("SetLogoutPath: %v", err)
+	}
+	h.OpenBrowser = func(logoutURL string) error {
+		st := stateFromURL(logoutURL)
+		go func() {
+			time.Sleep(20 * time.Millisecond)
+			cbURL := fmt.Sprintf("http://127.0.0.1:%d/logout?state=%s", port, st)
+			if resp, err := http.Get(cbURL); err == nil { //nolint:gosec // test-only URL
+				resp.Body.Close()
+			}
+		}()
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cb, err := h.StartLogoutFlow(ctx, "http://idp.example.com/logout?state=logoutstate")
+	if err != nil {
+		t.Fatalf("StartLogoutFlow: %v", err)
+	}
+	u, err := url.Parse(cb)
+	if err != nil {
+		t.Fatalf("parse callback: %v", err)
+	}
+	if u.Path != "/logout" {
+		t.Errorf("callback path = %q, want /logout", u.Path)
+	}
+	if u.Query().Get("state") != "logoutstate" {
+		t.Errorf("state = %q, want logoutstate", u.Query().Get("state"))
+	}
+}
+
 func contains(s, substr string) bool {
 	for i := range s {
 		if i+len(substr) <= len(s) && s[i:i+len(substr)] == substr {

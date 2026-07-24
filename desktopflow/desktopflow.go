@@ -25,6 +25,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -42,6 +43,9 @@ type Handler struct {
 	host        string
 	port        string
 	path        string
+
+	logoutRedirectURI string
+	logoutPath        string
 
 	broker *broker
 
@@ -67,6 +71,10 @@ func New(port int) *Handler {
 		port:        fmt.Sprintf("%d", port),
 		path:        "/callback",
 	}
+	// Logout defaults to the login redirect URI; override with SetLogoutURI or
+	// SetLogoutPath when the IdP registers a distinct post_logout_redirect_uri.
+	h.logoutRedirectURI = h.redirectURI
+	h.logoutPath = h.path
 	h.broker = newBroker(loopbackAddrs(h.host, h.port), h.pageFor)
 	return h
 }
@@ -101,6 +109,8 @@ func NewWithURI(uri string) (*Handler, error) {
 		port:        port,
 		path:        path,
 	}
+	h.logoutRedirectURI = h.redirectURI
+	h.logoutPath = h.path
 	h.broker = newBroker(loopbackAddrs(h.host, h.port), h.pageFor)
 	return h, nil
 }
@@ -115,12 +125,68 @@ func (h *Handler) RedirectURI() string {
 // Returns the full callback URL including query parameters. The context controls
 // timeout/cancellation.
 func (h *Handler) StartAuthFlow(ctx context.Context, authURL string) (string, error) {
-	return h.runFlow(ctx, authURL, h.path)
+	return h.runFlow(ctx, authURL, h.path, h.redirectURI)
+}
+
+// StartLogoutFlow opens the end-session URL and waits for the post-logout
+// callback on the handler's logout path (which defaults to the login path).
+// It implements pkceflow.LogoutFlowHandler.
+func (h *Handler) StartLogoutFlow(ctx context.Context, logoutURL string) (string, error) {
+	return h.runFlow(ctx, logoutURL, h.logoutPath, h.logoutRedirectURI)
+}
+
+// PostLogoutRedirectURI returns the URI sent as post_logout_redirect_uri. It
+// defaults to the login redirect URI unless SetLogoutURI or SetLogoutPath was
+// called. It implements pkceflow.LogoutFlowHandler.
+func (h *Handler) PostLogoutRedirectURI() string {
+	return h.logoutRedirectURI
+}
+
+// SetLogoutURI configures a distinct post-logout redirect URI for RP-Initiated
+// Logout. IdPs commonly register post_logout_redirect_uris separately from
+// redirect_uris. The URI must be a loopback URI sharing the same host and port
+// as the login redirect URI; only the path may differ, because a single broker
+// binds one port.
+func (h *Handler) SetLogoutURI(uri string) error {
+	parsed, err := url.Parse(uri)
+	if err != nil {
+		return fmt.Errorf("desktopflow: invalid logout URI: %w", err)
+	}
+	if !isLoopback(parsed.Hostname()) {
+		return fmt.Errorf("desktopflow: logout URI host %q is not a loopback address (must be 127.0.0.1, localhost, or [::1])", parsed.Hostname())
+	}
+	if parsed.Hostname() != h.host || parsed.Port() != h.port {
+		return fmt.Errorf("desktopflow: logout URI must share host %q and port %q with the login redirect URI (only the path may differ)", h.host, h.port)
+	}
+	path := parsed.Path
+	if path == "" {
+		path = "/"
+	}
+	h.logoutRedirectURI = uri
+	h.logoutPath = path
+	return nil
+}
+
+// SetLogoutPath configures a distinct callback path for logout on the same host
+// and port as login. It is a convenience wrapper over SetLogoutURI.
+func (h *Handler) SetLogoutPath(path string) error {
+	if !strings.HasPrefix(path, "/") {
+		return fmt.Errorf("desktopflow: logout path %q must start with /", path)
+	}
+	u, err := url.Parse(h.redirectURI)
+	if err != nil {
+		return fmt.Errorf("desktopflow: %w", err)
+	}
+	u.Path = path
+	h.logoutRedirectURI = u.String()
+	h.logoutPath = path
+	return nil
 }
 
 // runFlow registers a one-shot waiter keyed by (path, state), opens the browser,
-// and waits for the matching callback or context cancellation.
-func (h *Handler) runFlow(ctx context.Context, targetURL, path string) (string, error) {
+// and waits for the matching callback or context cancellation. The returned
+// callback URL is reconstructed against redirectURI.
+func (h *Handler) runFlow(ctx context.Context, targetURL, path, redirectURI string) (string, error) {
 	state := stateFromURL(targetURL)
 	key := callbackKey(path, state)
 
@@ -141,9 +207,9 @@ func (h *Handler) runFlow(ctx context.Context, targetURL, path string) (string, 
 	select {
 	case res := <-ch:
 		if res.rawQuery == "" {
-			return h.redirectURI, nil
+			return redirectURI, nil
 		}
-		return h.redirectURI + "?" + res.rawQuery, nil
+		return redirectURI + "?" + res.rawQuery, nil
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}

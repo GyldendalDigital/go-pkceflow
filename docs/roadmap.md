@@ -63,7 +63,7 @@ Current status: **Early development** (pre-release)
 - [x] Integration example CLI
 - [x] Logout state correlation + optional LogoutFlowHandler
 - [x] Desktop shared callback broker (path+state routing, grace shutdown)
-- [ ] Desktop separate login/logout redirect URIs
+- [x] Desktop separate login/logout redirect URIs
 - [ ] Token claims helper (Claims, DecodeIDToken, Client.Claims)
 - [ ] CLI logout flags + claims helper
 - [ ] Docs: how-it-works (ELI5), Keycloak POC, Auth0, mobile deep linking
