@@ -88,20 +88,23 @@ Current status: **Early development** (pre-release)
 > Examples, guides, and v1.0 release prep.
 
 - [ ] README examples and getting started
-- [ ] IdP setup guides (Keycloak, Entra ID)
+- [ ] IdP setup guides: Keycloak (done), Auth0 (done), Entra ID, generic OIDC provider
 - [ ] Wails integration guide
-- [ ] Release v1.0.0
-- [ ] Migration guide (from custom implementations)
+- [x] Example: CLI app
 - [ ] Example: Wails desktop app
-- [ ] Example: CLI app
+- [ ] Release v1.0.0
 - [ ] v1.0.0-beta.1 release
 
 ## Version Plan
 
-- `v0.x` -- API exploration, breaking changes expected
-- `v1.0.0-beta.x` -- Feature-complete, seeking feedback
+- `v0.9.x-alpha/beta` -- Feature-complete but unproven against real IdPs, devices, and OSes
+- `v1.0.0-beta.x` -- Feature-complete, validated, seeking feedback
 - `v1.0.0-rc.x` -- API frozen, bug fixes only
 - `v1.0.0` -- Stable release
+
+Docs are vendor- and consumer-agnostic: no migration guide tied to any specific
+application. IdP guidance favours a generic OIDC guide plus a small set of
+high-value provider walkthroughs to keep maintenance sustainable.
 
 ## Backlog
 
