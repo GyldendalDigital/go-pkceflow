@@ -373,7 +373,7 @@ func (s *FakeIDPServer) handleJWKS(w http.ResponseWriter, _ *http.Request) {
 		},
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(jwks) //nolint:errcheck
+	json.NewEncoder(w).Encode(jwks) //nolint:errcheck // test server: response write errors are not actionable
 }
 
 // handleEndSession simulates RP-Initiated Logout.
@@ -385,7 +385,7 @@ func (s *FakeIDPServer) handleEndSession(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, "Logged out") //nolint:errcheck
+	fmt.Fprint(w, "Logged out") //nolint:errcheck // test server: response write errors are not actionable
 }
 
 // handleUserinfo returns basic user info claims.
@@ -396,7 +396,7 @@ func (s *FakeIDPServer) handleUserinfo(w http.ResponseWriter, _ *http.Request) {
 		"email": "test@example.com",
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(claims) //nolint:errcheck
+	json.NewEncoder(w).Encode(claims) //nolint:errcheck // test server: response write errors are not actionable
 }
 
 // signIDToken creates a signed JWT ID token.

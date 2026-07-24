@@ -42,7 +42,7 @@ func NewFakeFlowHandler(server *FakeIDPServer, redirectURI string) *FakeFlowHand
 // StartAuthFlow completes the authorization flow by requesting the auth URL
 // and capturing the redirect callback URL (with code and state).
 func (h *FakeFlowHandler) StartAuthFlow(ctx context.Context, authURL string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, authURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, authURL, http.NoBody)
 	if err != nil {
 		return "", fmt.Errorf("oidctest: FakeFlowHandler build request: %w", err)
 	}
