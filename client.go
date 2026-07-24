@@ -177,6 +177,7 @@ func (c *Client) RestoreSession() bool {
 func (c *Client) Init(ctx context.Context) error {
 	provider, err := oidc.NewProvider(ctx, c.config.IssuerURL)
 	if err != nil {
+		c.emitter.Emit(EventInitFailed, nil)
 		return fmt.Errorf("pkceflow: OIDC discovery failed for %q: %w", c.config.IssuerURL, err)
 	}
 

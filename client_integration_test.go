@@ -66,6 +66,28 @@ func TestInit_BadIssuer(t *testing.T) {
 	}
 }
 
+func TestInit_BadIssuer_EmitsInitFailed(t *testing.T) {
+	handler := oidctest.NewFakeFlowHandler(nil, "http://127.0.0.1:9999/callback")
+	emitter := &oidctest.RecordingEmitter{}
+	client, err := pkceflow.New(pkceflow.Config{
+		IssuerURL: "https://invalid.example.com",
+		ClientID:  "test-app",
+	}, handler, pkceflow.WithEventEmitter(emitter))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := client.Init(ctx); err == nil {
+		t.Fatal("expected Init to fail with bad issuer")
+	}
+	if !emitter.HasEvent(pkceflow.EventInitFailed) {
+		t.Error("EventInitFailed not emitted on discovery failure")
+	}
+}
+
 func TestInit_Idempotent(t *testing.T) {
 	client, _, _, _ := newTestClient(t)
 
