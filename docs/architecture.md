@@ -14,14 +14,17 @@ go-pkceflow                         Core library (framework-agnostic)
   errors.go                         Sentinel errors, AuthError type
   state.go                          TokenState, AuthStatusResult
   refresh.go                        Token refresh (single-shot + background loop)
-  options.go                        Functional options (WithLogger, WithStore, etc.)
-  desktopflow/                      Localhost callback + system browser (implements AuthFlowHandler)
+  options.go                        Functional options (WithLogger, WithTokenPersistence, WithEventEmitter)
+  claims.go                         ID token claims decoding (Claims, DecodeIDToken)
+  desktopflow/                      Localhost callback broker + system browser (implements AuthFlowHandler, LogoutFlowHandler)
   mobileflow/                       Channel-based handler for deep link callbacks
-  keyringstore/                     OS credential manager via go-keyring (implements TokenPersistence)
-  filestore/                        AES-256-GCM encrypted file (fallback TokenPersistence)
-  keychainstore/                    iOS Keychain (build-tagged darwin/ios)
+  filestore/                        AES-256-GCM encrypted file (default TokenPersistence)
   eventbus/                         DeferredEventBus, NoopEventBus utilities
   oidctest/                         FakeIDPServer, test doubles, assertion helpers
+
+An OS-keyring-backed TokenPersistence is a possible future backend. Because
+storage is behind the TokenPersistence interface, adding it later is additive
+and does not break the API.
 
 wails-pkceflow                      Wails v3 wrapper (depends on go-pkceflow)
   wailspkceflow.go                  AuthService (Wails service lifecycle adapter)
@@ -31,7 +34,7 @@ wails-pkceflow                      Wails v3 wrapper (depends on go-pkceflow)
 
 ## Core Interfaces
 
-The library is built around three focused interfaces:
+The library is built around a small set of focused interfaces:
 
 **AuthFlowHandler** -- Handles the platform-specific part of the OAuth flow (opening a browser, receiving the callback).
 - `StartAuthFlow(ctx, authURL) (callbackURL, error)` -- Opens auth URL, returns the callback URL with code+state
@@ -105,18 +108,21 @@ The background refresh loop uses DHCP-style adaptive timing:
 
 | Platform | AuthFlowHandler | TokenPersistence | Notes |
 |----------|----------------|------------------|-------|
-| Linux | desktopflow (localhost + xdg-open) | keyringstore (secret-service) | filestore fallback |
-| macOS | desktopflow (localhost + open) | keyringstore (Keychain) | |
-| Windows | desktopflow (localhost + start) | keyringstore (Credential Manager) | |
-| iOS | mobileflow (Universal Links) | keychainstore | Consumer provides deep link wiring |
+| Linux | desktopflow (localhost + xdg-open) | filestore | Encrypted file in user config dir |
+| macOS | desktopflow (localhost + open) | filestore | Encrypted file in user config dir |
+| Windows | desktopflow (localhost + start) | filestore | Encrypted file in user config dir |
+| iOS | mobileflow (Universal Links) | filestore (app sandbox) | Consumer provides deep link wiring |
 | Android | mobileflow (App Links) | filestore (app sandbox) | Kernel UID isolation |
+
+An OS-native credential store (keyring/Keychain) may be added later as an
+additional TokenPersistence implementation without changing the core API.
 
 ## Security Model
 
 - PKCE S256 only (never plain)
 - State parameter: 32 bytes from crypto/rand, compared with subtle.ConstantTimeCompare
 - Tokens never logged at any level
-- Localhost server binds 127.0.0.1 only (not 0.0.0.0)
+- Localhost server binds loopback only (127.0.0.1, and [::1] for the localhost host), never a wildcard address
 - File-based token encryption: AES-256-GCM with random nonce per write
 - Key derivation: SHA-256(appID + machineID); fallback to persisted random key file
 - Redirect URIs: loopback IP literal per RFC 8252 (desktop), claimed HTTPS (mobile)
@@ -138,7 +144,7 @@ Designed and tested for:
 | Separate repos for core and wrapper | Independent versioning, clear dependency direction |
 | Interfaces over concrete types | Testability, platform flexibility |
 | No mobile AuthFlowHandler in library | Deep link setup is app-specific; library provides the channel-based handler, consumer wires the platform bridge |
-| Keyring as default store (not file) | More secure, no key management needed, works on all desktop OS |
-| File store as fallback | Headless/CI environments, Linux without secret-service |
+| Filestore as the default store | No external service or platform toolchain required; works headless and cross-compiles without CGo |
+| OS keyring deferred to a future backend | The TokenPersistence interface allows adding it later without breaking changes |
 | Random persistent key (not hostname) | Hostname changes don't invalidate tokens |
 | DeferredEventBus pattern | Solves Wails startup ordering (services created before app is ready) |
