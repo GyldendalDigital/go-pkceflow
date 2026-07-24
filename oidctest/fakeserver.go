@@ -36,6 +36,7 @@ type FakeIDPServer struct {
 	codes         map[string]*pendingCode // authorization code -> pending exchange
 	refreshTokens map[string]*tokenState  // refresh token -> associated state
 	errorQueue    []string                // queued errors to return on next token request
+	forceNonce    *string                 // when set, overrides the ID token nonce claim
 	nowFunc       func() time.Time
 }
 
@@ -85,6 +86,14 @@ func WithIDTokenTTL(d time.Duration) Option {
 // WithClock sets the time function. Default: time.Now. Use for testing token expiry.
 func WithClock(now func() time.Time) Option {
 	return func(s *FakeIDPServer) { s.nowFunc = now }
+}
+
+// WithForcedIDTokenNonce overrides the nonce claim written into issued ID
+// tokens, regardless of the nonce sent on the authorization request. Use it in
+// tests to exercise nonce-mismatch handling. Pass an empty string to omit the
+// nonce claim entirely.
+func WithForcedIDTokenNonce(nonce string) Option {
+	return func(s *FakeIDPServer) { s.forceNonce = &nonce }
 }
 
 // NewFakeIDP creates and starts a fake OIDC provider.
@@ -193,7 +202,6 @@ func (s *FakeIDPServer) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid client_id", http.StatusBadRequest)
 		return
 	}
-
 	if codeChallengeMethod != "" && codeChallengeMethod != "S256" {
 		redirectWithError(w, r, redirectURI, state, "invalid_request", "only S256 supported")
 		return
@@ -203,6 +211,9 @@ func (s *FakeIDPServer) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 	code := generateRandomString(32)
 
 	s.mu.Lock()
+	if s.forceNonce != nil {
+		nonce = *s.forceNonce
+	}
 	s.codes[code] = &pendingCode{
 		clientID:     clientID,
 		redirectURI:  redirectURI,
