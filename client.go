@@ -29,6 +29,8 @@ type Client struct {
 	oauth2   *oauth2.Config
 
 	endSessionEndpoint string
+
+	refreshCancel context.CancelFunc // cancels the active refresh loop
 }
 
 // New creates a new Client with the given configuration and flow handler.
