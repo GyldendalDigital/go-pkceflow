@@ -43,9 +43,17 @@ func (c *Client) Login(ctx context.Context) error {
 		return err
 	}
 
+	// Generate a random nonce for OIDC replay protection. It is sent on the
+	// authorization request and validated against the ID token nonce claim.
+	nonce, err := randomState()
+	if err != nil {
+		return err
+	}
+
 	// Build authorization URL
 	authOpts := []oauth2.AuthCodeOption{
 		oauth2.S256ChallengeOption(pkceVerifier),
+		oauth2.SetAuthURLParam("nonce", nonce),
 	}
 	for k, v := range c.config.ExtraAuthParams {
 		authOpts = append(authOpts, oauth2.SetAuthURLParam(k, v))
@@ -106,8 +114,16 @@ func (c *Client) Login(ctx context.Context) error {
 		return fmt.Errorf("pkceflow: no id_token in token response")
 	}
 
-	if _, err := verifier.Verify(ctx, rawIDToken); err != nil {
+	idToken, err := verifier.Verify(ctx, rawIDToken)
+	if err != nil {
 		return fmt.Errorf("pkceflow: ID token validation failed: %w", err)
+	}
+
+	// Validate the nonce claim (constant-time) to detect token replay or
+	// injection. OIDC Core requires the nonce to be present and to match the
+	// value that was sent on the authorization request.
+	if subtle.ConstantTimeCompare([]byte(nonce), []byte(idToken.Nonce)) != 1 {
+		return fmt.Errorf("pkceflow: %w", ErrNonceMismatch)
 	}
 
 	// Build and persist token state

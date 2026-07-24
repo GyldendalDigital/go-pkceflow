@@ -2,6 +2,7 @@ package pkceflow_test
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"testing"
 	"time"
@@ -150,6 +151,45 @@ func TestLogin_NotInitialized(t *testing.T) {
 	err := client.Login(context.Background())
 	if err == nil {
 		t.Fatal("Login without Init should fail")
+	}
+}
+
+func TestLogin_NonceMismatch(t *testing.T) {
+	tests := []struct {
+		name        string
+		forcedNonce string
+	}{
+		{name: "wrong nonce", forcedNonce: "attacker-controlled-nonce"},
+		{name: "missing nonce", forcedNonce: ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			redirectURI := "http://127.0.0.1:9999/callback"
+			idp := oidctest.NewFakeIDP(t,
+				oidctest.WithClientID("test-app"),
+				oidctest.WithRedirectURI(redirectURI),
+				oidctest.WithForcedIDTokenNonce(tc.forcedNonce),
+			)
+
+			handler := oidctest.NewFakeFlowHandler(idp, redirectURI)
+			client, err := pkceflow.New(pkceflow.Config{
+				IssuerURL: idp.IssuerURL(),
+				ClientID:  "test-app",
+			}, handler)
+			if err != nil {
+				t.Fatalf("pkceflow.New: %v", err)
+			}
+
+			if err := client.Init(context.Background()); err != nil {
+				t.Fatalf("Init: %v", err)
+			}
+
+			err = client.Login(context.Background())
+			if !errors.Is(err, pkceflow.ErrNonceMismatch) {
+				t.Fatalf("Login: expected ErrNonceMismatch, got %v", err)
+			}
+		})
 	}
 }
 

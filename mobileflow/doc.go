@@ -5,6 +5,12 @@
 // no platform dependencies; the platform-specific wiring (iOS Universal Links,
 // Android App Links) is handled by the consumer or a wrapper like wails-pkceflow.
 //
+// Handler also implements pkceflow.LogoutFlowHandler for RP-Initiated Logout.
+// StartLogoutFlow reuses the same delivery channel as StartAuthFlow, so the
+// app's deep link handler needs no extra wiring. The post-logout redirect URI
+// defaults to the login redirect URI; override it with SetLogoutURI when the
+// IdP registers a distinct post_logout_redirect_uri.
+//
 // Usage:
 //
 //	handler := mobileflow.New("https://myapp.example.com/auth/callback", openURL)

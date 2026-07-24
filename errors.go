@@ -16,6 +16,11 @@ var (
 	// This indicates a potential CSRF attack or a stale callback.
 	ErrStateMismatch = errors.New("pkceflow: state parameter mismatch")
 
+	// ErrNonceMismatch is returned when the nonce claim in the returned ID
+	// token does not match the nonce sent in the authorization request.
+	// This indicates a potential token replay or injection attack.
+	ErrNonceMismatch = errors.New("pkceflow: nonce mismatch")
+
 	// ErrFlowCancelled is returned when the auth flow is cancelled,
 	// either by context cancellation or user action.
 	ErrFlowCancelled = errors.New("pkceflow: auth flow cancelled")

@@ -68,6 +68,13 @@ Current status: **Early development** (pre-release)
 - [x] CLI logout flags + claims helper
 - [x] Docs: how-it-works (ELI5), Keycloak POC, Auth0, mobile deep linking
 
+### M8.5: Core Completion ✓
+> Final core hardening and platform parity so the Wails wrapper builds against a frozen API.
+
+- [x] Always-on OIDC nonce (send + constant-time validate against ID token claim)
+- [x] Mobile logout parity (mobileflow implements LogoutFlowHandler)
+- [x] Token storage security model + bring-your-own TokenPersistence guidance
+
 ### M9: wails-pkceflow Wrapper
 > Wails v3 service adapter and event bridge.
 
@@ -94,3 +101,8 @@ Current status: **Early development** (pre-release)
 - `v1.0.0-beta.x` -- Feature-complete, seeking feedback
 - `v1.0.0-rc.x` -- API frozen, bug fixes only
 - `v1.0.0` -- Stable release
+
+## Backlog
+
+- OS-native credential store (keyring/Keychain) as an additional TokenPersistence
+  backend. Additive behind the existing interface; no core API change required.

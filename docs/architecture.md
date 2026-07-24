@@ -80,13 +80,14 @@ never decoded because they are opaque to clients per RFC 6750.
 ## Auth Flow (PKCE S256)
 
 1. Client generates PKCE verifier + S256 challenge
-2. Client generates 32-byte random state (base64url)
-3. Client builds authorization URL with challenge, state, scopes, extra params
+2. Client generates 32-byte random state and 32-byte random nonce (base64url)
+3. Client builds authorization URL with challenge, state, nonce, scopes, extra params
 4. AuthFlowHandler opens URL in system browser and waits for callback
 5. Client validates state (constant-time compare), checks for error params
 6. Client exchanges authorization code for tokens (with PKCE verifier)
 7. Client validates ID token signature via OIDC discovery JWKS
-8. Client persists token state and emits login event
+8. Client validates the ID token nonce claim (constant-time compare)
+9. Client persists token state and emits login event
 
 ## Token Lifecycle
 
@@ -121,6 +122,7 @@ additional TokenPersistence implementation without changing the core API.
 
 - PKCE S256 only (never plain)
 - State parameter: 32 bytes from crypto/rand, compared with subtle.ConstantTimeCompare
+- Nonce parameter: 32 bytes from crypto/rand, always sent and validated against the ID token nonce claim with subtle.ConstantTimeCompare (OIDC replay protection)
 - Tokens never logged at any level
 - Localhost server binds loopback only (127.0.0.1, and [::1] for the localhost host), never a wildcard address
 - File-based token encryption: AES-256-GCM with random nonce per write
