@@ -175,7 +175,7 @@ func (s *FakeIDPServer) handleDiscovery(w http.ResponseWriter, _ *http.Request) 
 		"code_challenge_methods_supported":      []string{"S256"},
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(doc) //nolint:errcheck // test server: response write errors are not actionable
+	json.NewEncoder(w).Encode(doc) //nolint:errcheck // response write failure surfaces as client-side error in test
 }
 
 // handleAuthorize simulates the authorization endpoint.
@@ -311,7 +311,7 @@ func (s *FakeIDPServer) handleAuthCodeExchange(w http.ResponseWriter, r *http.Re
 		"id_token":      idToken,
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp) //nolint:errcheck // test server: response write errors are not actionable
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck // response write failure surfaces as client-side error in test
 }
 
 func (s *FakeIDPServer) handleRefreshExchange(w http.ResponseWriter, r *http.Request) {
@@ -357,7 +357,7 @@ func (s *FakeIDPServer) handleRefreshExchange(w http.ResponseWriter, r *http.Req
 		"id_token":      idToken,
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp) //nolint:errcheck // test server: response write errors are not actionable
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck // response write failure surfaces as client-side error in test
 }
 
 // handleJWKS serves the JSON Web Key Set.
@@ -373,7 +373,7 @@ func (s *FakeIDPServer) handleJWKS(w http.ResponseWriter, _ *http.Request) {
 		},
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(jwks) //nolint:errcheck // test server: response write errors are not actionable
+	json.NewEncoder(w).Encode(jwks) //nolint:errcheck // response write failure surfaces as client-side error in test
 }
 
 // handleEndSession simulates RP-Initiated Logout.
@@ -385,7 +385,7 @@ func (s *FakeIDPServer) handleEndSession(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, "Logged out") //nolint:errcheck // test server: response write errors are not actionable
+	fmt.Fprint(w, "Logged out") //nolint:errcheck // response write failure surfaces as client-side error in test
 }
 
 // handleUserinfo returns basic user info claims.
@@ -396,7 +396,7 @@ func (s *FakeIDPServer) handleUserinfo(w http.ResponseWriter, _ *http.Request) {
 		"email": "test@example.com",
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(claims) //nolint:errcheck // test server: response write errors are not actionable
+	json.NewEncoder(w).Encode(claims) //nolint:errcheck // response write failure surfaces as client-side error in test
 }
 
 // signIDToken creates a signed JWT ID token.
@@ -445,7 +445,7 @@ func generateRandomString(n int) string {
 func tokenError(w http.ResponseWriter, code, description string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusBadRequest)
-	json.NewEncoder(w).Encode(map[string]string{ //nolint:errcheck
+	json.NewEncoder(w).Encode(map[string]string{ //nolint:errcheck // response write failure surfaces as client-side error in test
 		"error":             code,
 		"error_description": description,
 	})

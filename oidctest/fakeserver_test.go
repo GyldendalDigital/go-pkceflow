@@ -203,7 +203,7 @@ func TestFakeIDP_PKCERequired(t *testing.T) {
 	var errResp struct {
 		Error string `json:"error"`
 	}
-	json.NewDecoder(resp.Body).Decode(&errResp) //nolint:errcheck
+	json.NewDecoder(resp.Body).Decode(&errResp) //nolint:errcheck // response write failure surfaces as client-side error in test
 	if errResp.Error != "invalid_grant" {
 		t.Errorf("error = %q, want invalid_grant", errResp.Error)
 	}
@@ -230,7 +230,7 @@ func TestFakeIDP_QueueError(t *testing.T) {
 	var errResp struct {
 		Error string `json:"error"`
 	}
-	json.NewDecoder(resp.Body).Decode(&errResp) //nolint:errcheck
+	json.NewDecoder(resp.Body).Decode(&errResp) //nolint:errcheck // response write failure surfaces as client-side error in test
 	if errResp.Error != "invalid_grant" {
 		t.Errorf("error = %q, want invalid_grant", errResp.Error)
 	}
@@ -261,7 +261,7 @@ func TestFakeIDP_ConfigurableTokenExpiry(t *testing.T) {
 	var tokens struct {
 		ExpiresIn int `json:"expires_in"`
 	}
-	json.NewDecoder(resp.Body).Decode(&tokens) //nolint:errcheck
+	json.NewDecoder(resp.Body).Decode(&tokens) //nolint:errcheck // response write failure surfaces as client-side error in test
 	if tokens.ExpiresIn != 10 {
 		t.Errorf("expires_in = %d, want 10", tokens.ExpiresIn)
 	}
@@ -288,7 +288,7 @@ func TestFakeIDP_RefreshTokenRotationInvalidatesOld(t *testing.T) {
 	var tokens struct {
 		RefreshToken string `json:"refresh_token"`
 	}
-	json.NewDecoder(resp.Body).Decode(&tokens) //nolint:errcheck
+	json.NewDecoder(resp.Body).Decode(&tokens) //nolint:errcheck // response write failure surfaces as client-side error in test
 	resp.Body.Close()
 
 	// Use refresh token once (success)
