@@ -612,3 +612,37 @@ func TestWithHTTPClient_RoutesLibraryHTTP(t *testing.T) {
 		t.Error("JWKS verification did not use the custom HTTP client")
 	}
 }
+
+func TestLogin_PublicClient_NoBasicAuthProbe(t *testing.T) {
+	// Model a public client (like Keycloak): the token endpoint rejects HTTP
+	// Basic client auth and invalidates the code. If the client let oauth2 probe
+	// Basic-first, the exchange would fail with invalid_grant ("Code not valid").
+	// pkceflow must send client_id in the body (AuthStyleInParams) and never
+	// attempt Basic auth.
+	redirectURI := "http://127.0.0.1:9999/callback"
+	idp := oidctest.NewFakeIDP(t,
+		oidctest.WithClientID("test-app"),
+		oidctest.WithRedirectURI(redirectURI),
+		oidctest.WithRejectBasicAuth(),
+	)
+
+	handler := oidctest.NewFakeFlowHandler(idp, redirectURI)
+	client, err := pkceflow.New(pkceflow.Config{
+		IssuerURL: idp.IssuerURL(),
+		ClientID:  "test-app",
+	}, handler, pkceflow.WithTokenPersistence(&oidctest.MemoryStore{}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := client.Init(ctx); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := client.Login(ctx); err != nil {
+		t.Fatalf("Login failed against a public client (auth-style probe regression): %v", err)
+	}
+	if !client.AuthStatus().Valid {
+		t.Error("expected a valid session after login")
+	}
+}

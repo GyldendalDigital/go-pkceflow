@@ -25,20 +25,21 @@ type FakeIDPServer struct {
 	// Server is the underlying httptest.Server. Use IssuerURL() instead of accessing directly.
 	Server *httptest.Server
 
-	mu            sync.Mutex
-	key           *rsa.PrivateKey
-	signer        jose.Signer
-	clientID      string
-	redirectURIs  []string
-	accessTTL     time.Duration
-	refreshTTL    time.Duration
-	idTokenTTL    time.Duration
-	codes         map[string]*pendingCode // authorization code -> pending exchange
-	refreshTokens map[string]*tokenState  // refresh token -> associated state
-	errorQueue    []string                // queued errors to return on next token request
-	stickyError   string                  // when set, every token request returns this error
-	forceNonce    *string                 // when set, overrides the ID token nonce claim
-	nowFunc       func() time.Time
+	mu              sync.Mutex
+	key             *rsa.PrivateKey
+	signer          jose.Signer
+	clientID        string
+	redirectURIs    []string
+	accessTTL       time.Duration
+	refreshTTL      time.Duration
+	idTokenTTL      time.Duration
+	codes           map[string]*pendingCode // authorization code -> pending exchange
+	refreshTokens   map[string]*tokenState  // refresh token -> associated state
+	errorQueue      []string                // queued errors to return on next token request
+	stickyError     string                  // when set, every token request returns this error
+	rejectBasicAuth bool                    // when true, model a public client: reject HTTP Basic client auth and invalidate the code
+	forceNonce      *string                 // when set, overrides the ID token nonce claim
+	nowFunc         func() time.Time
 }
 
 type pendingCode struct {
@@ -89,12 +90,22 @@ func WithClock(now func() time.Time) Option {
 	return func(s *FakeIDPServer) { s.nowFunc = now }
 }
 
-// WithForcedIDTokenNonce overrides the nonce claim written into issued ID
-// tokens, regardless of the nonce sent on the authorization request. Use it in
+// WithForcedIDTokenNonce overrides the nonce claim written into issued ID// tokens, regardless of the nonce sent on the authorization request. Use it in
 // tests to exercise nonce-mismatch handling. Pass an empty string to omit the
 // nonce claim entirely.
 func WithForcedIDTokenNonce(nonce string) Option {
 	return func(s *FakeIDPServer) { s.forceNonce = &nonce }
+}
+
+// WithRejectBasicAuth models a public OAuth client (like a Keycloak public
+// client): the token endpoint rejects HTTP Basic client authentication with
+// invalid_client AND invalidates the single-use authorization code. This
+// reproduces the failure mode where a client that probes Basic-first cannot
+// silently recover by retrying with the client_id in the body, because the code
+// is already consumed. A correct public client must send client_id in the body
+// (oauth2.AuthStyleInParams) and never attempt Basic auth.
+func WithRejectBasicAuth() Option {
+	return func(s *FakeIDPServer) { s.rejectBasicAuth = true }
 }
 
 // NewFakeIDP creates and starts a fake OIDC provider.
@@ -277,6 +288,21 @@ func (s *FakeIDPServer) handleToken(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 
+	// Model a public client: HTTP Basic client authentication is rejected, and
+	// the single-use authorization code is invalidated (as Keycloak does), so a
+	// client that probes Basic-first cannot recover by retrying.
+	if s.rejectBasicAuth {
+		if _, _, ok := r.BasicAuth(); ok {
+			if code := r.FormValue("code"); code != "" {
+				s.mu.Lock()
+				delete(s.codes, code)
+				s.mu.Unlock()
+			}
+			tokenError(w, "invalid_client", "client authentication not allowed for public client")
+			return
+		}
+	}
+
 	grantType := r.FormValue("grant_type")
 	switch grantType {
 	case "authorization_code":
@@ -287,7 +313,6 @@ func (s *FakeIDPServer) handleToken(w http.ResponseWriter, r *http.Request) {
 		tokenError(w, "unsupported_grant_type", "unsupported grant_type: "+grantType)
 	}
 }
-
 func (s *FakeIDPServer) handleAuthCodeExchange(w http.ResponseWriter, r *http.Request) {
 	code := r.FormValue("code")
 	codeVerifier := r.FormValue("code_verifier")

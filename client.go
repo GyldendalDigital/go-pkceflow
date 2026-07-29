@@ -191,9 +191,18 @@ func (c *Client) Init(ctx context.Context) error {
 
 	c.provider = provider
 	c.verifier = provider.Verifier(&oidc.Config{ClientID: c.config.ClientID})
+	endpoint := provider.Endpoint()
+	// Force client_id in the request body (RFC 6749 section 2.3.1 "including the
+	// client credentials in the request-body"). pkceflow targets public native
+	// clients with no secret, so HTTP Basic client authentication is wrong. Left
+	// as AuthStyleAutoDetect, golang.org/x/oauth2 probes Basic first; providers
+	// like Keycloak reject Basic for a public client AND invalidate the
+	// single-use authorization code, so the automatic retry fails with
+	// "invalid_grant: Code not valid". Setting the style avoids the probe.
+	endpoint.AuthStyle = oauth2.AuthStyleInParams
 	c.oauth2 = &oauth2.Config{
 		ClientID:    c.config.ClientID,
-		Endpoint:    provider.Endpoint(),
+		Endpoint:    endpoint,
 		RedirectURL: c.flow.RedirectURI(),
 		Scopes:      c.config.Scopes,
 	}
