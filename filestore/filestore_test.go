@@ -202,6 +202,10 @@ func TestDirectoryAutoCreated(t *testing.T) {
 }
 
 func TestFilePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file mode bits do not model Windows ACLs")
+	}
+
 	dir := t.TempDir()
 
 	store, err := New("test-app", dir)
