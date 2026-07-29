@@ -3,6 +3,8 @@ package pkceflow
 import (
 	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 	"testing"
 
 	"golang.org/x/oauth2"
@@ -87,6 +89,11 @@ func TestIsPermanentError(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "session integrity error is permanent",
+			err:  newSessionIntegrityError("refreshed ID token subject changed", nil),
+			want: true,
+		},
+		{
 			name: "non-AuthError is not permanent",
 			err:  errors.New("network timeout"),
 			want: false,
@@ -130,10 +137,29 @@ func TestAsAuthError(t *testing.T) {
 		}
 	})
 
-	t.Run("RetrieveError without code is returned unchanged", func(t *testing.T) {
-		re := &oauth2.RetrieveError{}
-		if got := asAuthError(re); got != error(re) {
-			t.Errorf("expected original error, got %v", got)
+	t.Run("RetrieveError without code is sanitized", func(t *testing.T) {
+		re := &oauth2.RetrieveError{
+			Response: &http.Response{
+				Status:     "500 Internal Server Error",
+				StatusCode: http.StatusInternalServerError,
+			},
+			Body: []byte(`{"access_token":"secret-token","refresh_token":"secret-refresh"}`),
+		}
+		got := asAuthError(re)
+		var authErr *AuthError
+		if !errors.As(got, &authErr) {
+			t.Fatalf("expected *AuthError, got %T %[1]v", got)
+		}
+		if authErr.Code != "token_endpoint_error" {
+			t.Errorf("Code = %q, want token_endpoint_error", authErr.Code)
+		}
+		if !strings.Contains(authErr.Message, "500 Internal Server Error") {
+			t.Errorf("Message = %q, want status context", authErr.Message)
+		}
+		for _, secret := range []string{"secret-token", "secret-refresh", "access_token", "refresh_token"} {
+			if strings.Contains(got.Error(), secret) {
+				t.Fatalf("sanitized error leaked %q in %q", secret, got.Error())
+			}
 		}
 	})
 

@@ -6,6 +6,8 @@ import "context"
 // If the token is expired, it attempts a refresh. If refresh fails
 // and grace mode is active, returns the expired token.
 // Returns "" if no usable token is available.
+// Session-integrity failures, such as a refreshed ID token for a different
+// subject, never return the expired token from grace mode.
 //
 // AccessToken never returns an error: a failed refresh is logged at debug level
 // and surfaces as an empty string. It also does not emit events; only the
@@ -40,6 +42,9 @@ func (c *Client) AccessToken(ctx context.Context) string {
 				return newState.AccessToken
 			}
 			c.logger.Debug("token refresh failed in AccessToken", "error", err)
+			if isSessionIntegrityError(err) {
+				return ""
+			}
 		}
 	}
 

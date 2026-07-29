@@ -39,6 +39,9 @@ type FakeIDPServer struct {
 	stickyError     string                  // when set, every token request returns this error
 	rejectBasicAuth bool                    // when true, model a public client: reject HTTP Basic client auth and invalidate the code
 	forceNonce      *string                 // when set, overrides the ID token nonce claim
+	omitRefreshID   bool                    // when true, refresh responses omit id_token
+	refreshSubject  *string                 // when set, overrides refresh ID token subject
+	refreshRawID    *string                 // when set, refresh responses use this raw id_token
 	nowFunc         func() time.Time
 }
 
@@ -90,11 +93,32 @@ func WithClock(now func() time.Time) Option {
 	return func(s *FakeIDPServer) { s.nowFunc = now }
 }
 
-// WithForcedIDTokenNonce overrides the nonce claim written into issued ID// tokens, regardless of the nonce sent on the authorization request. Use it in
+// WithForcedIDTokenNonce overrides the nonce claim written into issued ID tokens,
+// regardless of the nonce sent on the authorization request. Use it in
 // tests to exercise nonce-mismatch handling. Pass an empty string to omit the
 // nonce claim entirely.
 func WithForcedIDTokenNonce(nonce string) Option {
 	return func(s *FakeIDPServer) { s.forceNonce = &nonce }
+}
+
+// WithOmitRefreshIDToken makes refresh responses omit id_token. Some providers
+// only return a fresh access token and refresh token during refresh; clients
+// should preserve the already-verified ID token in that case.
+func WithOmitRefreshIDToken() Option {
+	return func(s *FakeIDPServer) { s.omitRefreshID = true }
+}
+
+// WithRefreshIDTokenSubject overrides the subject claim used in ID tokens
+// returned by refresh responses. Use it to exercise clients that must reject a
+// refresh response for a different user while accepting the same issuer/audience.
+func WithRefreshIDTokenSubject(subject string) Option {
+	return func(s *FakeIDPServer) { s.refreshSubject = &subject }
+}
+
+// WithRawRefreshIDToken makes refresh responses return raw as id_token. Use it
+// to test clients rejecting malformed or incorrectly signed refreshed ID tokens.
+func WithRawRefreshIDToken(raw string) Option {
+	return func(s *FakeIDPServer) { s.refreshRawID = &raw }
 }
 
 // WithRejectBasicAuth models a public OAuth client (like a Keycloak public
@@ -386,6 +410,12 @@ func (s *FakeIDPServer) handleRefreshExchange(w http.ResponseWriter, r *http.Req
 	}
 	accessTTL := s.accessTTL
 	idTokenTTL := s.idTokenTTL
+	omitIDToken := s.omitRefreshID
+	rawIDToken := s.refreshRawID
+	subject := stateSubject(state)
+	if s.refreshSubject != nil {
+		subject = *s.refreshSubject
+	}
 	s.mu.Unlock()
 
 	if !ok {
@@ -396,10 +426,18 @@ func (s *FakeIDPServer) handleRefreshExchange(w http.ResponseWriter, r *http.Req
 	now := s.now()
 	accessToken := generateRandomString(32)
 	newRefreshToken := generateRandomString(32)
-	idToken, err := s.signIDToken(state.subject, state.clientID, "", now, idTokenTTL)
-	if err != nil {
-		tokenError(w, "server_error", "failed to sign ID token")
-		return
+	var idToken string
+	if !omitIDToken {
+		if rawIDToken != nil {
+			idToken = *rawIDToken
+		} else {
+			var err error
+			idToken, err = s.signIDToken(subject, state.clientID, "", now, idTokenTTL)
+			if err != nil {
+				tokenError(w, "server_error", "failed to sign ID token")
+				return
+			}
+		}
 	}
 
 	// Store new refresh token
@@ -416,10 +454,19 @@ func (s *FakeIDPServer) handleRefreshExchange(w http.ResponseWriter, r *http.Req
 		"token_type":    "Bearer",
 		"expires_in":    int(accessTTL.Seconds()),
 		"refresh_token": newRefreshToken,
-		"id_token":      idToken,
+	}
+	if idToken != "" {
+		resp["id_token"] = idToken
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck // response write failure surfaces as client-side error in test
+}
+
+func stateSubject(state *tokenState) string {
+	if state == nil {
+		return ""
+	}
+	return state.subject
 }
 
 // handleJWKS serves the JSON Web Key Set.

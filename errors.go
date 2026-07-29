@@ -30,6 +30,8 @@ var (
 	// ErrNotAuthenticated is returned by methods that require an authenticated
 	// session (e.g., Claims) when no ID token is available.
 	ErrNotAuthenticated = errors.New("pkceflow: not authenticated (no ID token available)")
+
+	errSessionIntegrity = errors.New("pkceflow: session integrity check failed")
 )
 
 // AuthError represents an OAuth2/OIDC error returned by the identity provider.
@@ -54,16 +56,30 @@ var permanentErrorCodes = map[string]bool{
 	"unauthorized_client": true,
 }
 
-// IsPermanentError reports whether err represents a permanent OAuth2 error
-// that cannot be resolved by retrying. When true, the refresh token is
-// invalid (revoked, expired, or the client is no longer authorized) and
-// the user must re-authenticate via Login().
+// IsPermanentError reports whether err represents a permanent OAuth2 or
+// session-integrity error that cannot be resolved by retrying. When true, the
+// refresh token is invalid (revoked, expired, or the client is no longer
+// authorized), or the refreshed session no longer matches the trusted session.
 func IsPermanentError(err error) bool {
+	if errors.Is(err, errSessionIntegrity) {
+		return true
+	}
 	var authErr *AuthError
 	if errors.As(err, &authErr) {
 		return permanentErrorCodes[authErr.Code]
 	}
 	return false
+}
+
+func newSessionIntegrityError(message string, cause error) error {
+	if cause != nil {
+		return fmt.Errorf("%w: %s: %w", errSessionIntegrity, message, cause)
+	}
+	return fmt.Errorf("%w: %s", errSessionIntegrity, message)
+}
+
+func isSessionIntegrityError(err error) bool {
+	return errors.Is(err, errSessionIntegrity)
 }
 
 // asAuthError converts an OAuth2 token-endpoint error into an *AuthError,
@@ -72,13 +88,24 @@ func IsPermanentError(err error) bool {
 //
 // golang.org/x/oauth2 returns *oauth2.RetrieveError for token-endpoint failures;
 // its Error() can include the raw response body, so converting here also stops
-// that body from propagating into logs and consumer errors. Errors without an
-// OAuth2 error code (network failures, non-standard responses) are returned
-// unchanged so their original context is preserved.
+// that body from propagating into logs and consumer errors. Non-standard
+// responses without an OAuth2 error code are still converted so raw response
+// bodies never escape through the public API or debug logs.
 func asAuthError(err error) error {
 	var re *oauth2.RetrieveError
-	if errors.As(err, &re) && re.ErrorCode != "" {
-		return &AuthError{Code: re.ErrorCode, Message: re.ErrorDescription}
+	if !errors.As(err, &re) {
+		return err
 	}
-	return err
+
+	code := re.ErrorCode
+	if code == "" {
+		code = "token_endpoint_error"
+	}
+
+	message := re.ErrorDescription
+	if message == "" && re.Response != nil {
+		message = "token endpoint returned " + re.Response.Status
+	}
+
+	return &AuthError{Code: code, Message: message}
 }

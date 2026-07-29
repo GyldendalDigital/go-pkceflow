@@ -24,8 +24,8 @@ const (
 	EventTokenRefreshed = "oidcauth:token-refreshed" //nolint:gosec // G101 false positive: not a credential
 
 	// EventSessionExpired is emitted when the refresh token is permanently
-	// invalid (e.g., revoked) and the grace period (if configured) has expired.
-	// The user must re-authenticate via Login().
+	// invalid (e.g., revoked) and the grace period (if configured) has expired,
+	// or when a refresh response fails session-integrity checks.
 	EventSessionExpired = "oidcauth:session-expired"
 
 	// EventInitFailed is emitted when Init() fails to perform OIDC discovery.

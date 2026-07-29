@@ -82,6 +82,16 @@ See [`examples/cli/main.go`](examples/cli/main.go) for the complete source.
 To try a distinct, separately registered post-logout redirect URI, add
 `--logout-path=/logout` (and register that URI with your IdP).
 
+## Configuration Notes
+
+go-pkceflow targets public native clients. Do not configure or pass a
+`client_secret`; native apps cannot keep one secret. `Config.ExtraAuthParams`
+and `Config.ExtraTokenParams` are only for provider-specific additions such as
+`prompt`, `audience`, or `resource`. Protected OAuth/OIDC/PKCE parameters such
+as `nonce`, `state`, `scope`, `redirect_uri`, `code_challenge`,
+`code_verifier`, `client_id`, and `client_secret` are owned by the library and
+rejected during validation.
+
 ## Documentation
 
 New to OAuth/OIDC or setting up an IdP for the first time? Start here:
