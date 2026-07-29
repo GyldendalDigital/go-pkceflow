@@ -24,6 +24,11 @@ func (c *Client) refresh(ctx context.Context, snapshot *TokenState) (TokenState,
 		return TokenState{}, ErrNotInitialized
 	}
 	oauthCfg := *c.oauth2
+	verifier := c.verifier
+	if verifier == nil {
+		c.mu.Unlock()
+		return TokenState{}, ErrNotInitialized
+	}
 	c.mu.Unlock()
 
 	// Route the refresh through the configured HTTP client, if any.
@@ -51,6 +56,27 @@ func (c *Client) refresh(ctx context.Context, snapshot *TokenState) (TokenState,
 	idToken, _ := newToken.Extra("id_token").(string)
 	if idToken == "" {
 		idToken = snapshot.IDToken
+	} else {
+		verified, err := verifier.Verify(ctx, idToken)
+		if err != nil {
+			return TokenState{}, newSessionIntegrityError("refreshed ID token validation failed", err)
+		}
+		if verified.Subject == "" {
+			return TokenState{}, newSessionIntegrityError("refreshed ID token subject is empty", nil)
+		}
+		if snapshot.IDToken == "" {
+			return TokenState{}, newSessionIntegrityError("current ID token unavailable during refresh", nil)
+		}
+		claims, err := DecodeIDToken(snapshot.IDToken)
+		if err != nil {
+			return TokenState{}, newSessionIntegrityError("current ID token claims unavailable during refresh", err)
+		}
+		if claims.Subject == "" {
+			return TokenState{}, newSessionIntegrityError("current ID token subject is empty during refresh", nil)
+		}
+		if verified.Subject != claims.Subject {
+			return TokenState{}, newSessionIntegrityError("refreshed ID token subject changed", nil)
+		}
 	}
 
 	now := c.now()

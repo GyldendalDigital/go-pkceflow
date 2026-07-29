@@ -83,6 +83,11 @@ func (c *Client) doRefresh(ctx context.Context) bool {
 
 	c.logger.Debug("refresh loop: refresh failed", "error", err)
 
+	if isSessionIntegrityError(err) {
+		c.emitter.Emit(EventSessionExpired, nil)
+		return false
+	}
+
 	if IsPermanentError(err) {
 		// Check if grace period saves us
 		if c.config.GracePeriod > 0 && !state.LastAuthAt.IsZero() {

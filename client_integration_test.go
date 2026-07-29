@@ -2,6 +2,7 @@ package pkceflow_test
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/url"
@@ -478,6 +479,12 @@ func waitForEvent(t *testing.T, emitter *oidctest.RecordingEmitter, name string,
 	t.Fatalf("event %q not emitted within %s; got events %+v", name, timeout, emitter.Events())
 }
 
+func unsignedIDToken(payload string) string {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+	body := base64.RawURLEncoding.EncodeToString([]byte(payload))
+	return header + "." + body + ".signature"
+}
+
 func TestRefreshLoop_PermanentError_EmitsSessionExpired(t *testing.T) {
 	client, idp, _, emitter := newTestClient(t)
 
@@ -610,6 +617,327 @@ func TestWithHTTPClient_RoutesLibraryHTTP(t *testing.T) {
 	}
 	if got := ct.count("/jwks"); got == 0 {
 		t.Error("JWKS verification did not use the custom HTTP client")
+	}
+}
+
+func TestRefresh_PreservesIDTokenWhenRefreshOmitsOne(t *testing.T) {
+	redirectURI := "http://127.0.0.1:9999/callback"
+	idp := oidctest.NewFakeIDP(t,
+		oidctest.WithClientID("test-app"),
+		oidctest.WithRedirectURI(redirectURI),
+		oidctest.WithAccessTTL(5*time.Second), // beyond the 30s freshness buffer
+		oidctest.WithOmitRefreshIDToken(),
+	)
+
+	store := &oidctest.MemoryStore{}
+	handler := oidctest.NewFakeFlowHandler(idp, redirectURI)
+	client, err := pkceflow.New(pkceflow.Config{
+		IssuerURL: idp.IssuerURL(),
+		ClientID:  "test-app",
+	}, handler, pkceflow.WithTokenPersistence(store))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := client.Init(ctx); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := client.Login(ctx); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	before, err := store.Load()
+	if err != nil {
+		t.Fatalf("load before refresh: %v", err)
+	}
+	if before.IDToken == "" {
+		t.Fatal("login did not store ID token")
+	}
+
+	if got := client.AccessToken(ctx); got == "" {
+		t.Fatal("AccessToken returned empty string after refresh without id_token")
+	}
+
+	after, err := store.Load()
+	if err != nil {
+		t.Fatalf("load after refresh: %v", err)
+	}
+	if after.AccessToken == before.AccessToken {
+		t.Error("access token was not refreshed")
+	}
+	if after.IDToken != before.IDToken {
+		t.Error("refresh without id_token did not preserve the previous verified ID token")
+	}
+}
+
+func TestRefresh_RejectsIDTokenForDifferentSubject(t *testing.T) {
+	redirectURI := "http://127.0.0.1:9999/callback"
+	idp := oidctest.NewFakeIDP(t,
+		oidctest.WithClientID("test-app"),
+		oidctest.WithRedirectURI(redirectURI),
+		oidctest.WithAccessTTL(5*time.Second), // beyond the 30s freshness buffer
+		oidctest.WithRefreshIDTokenSubject("attacker-user"),
+	)
+
+	store := &oidctest.MemoryStore{}
+	emitter := &oidctest.RecordingEmitter{}
+	handler := oidctest.NewFakeFlowHandler(idp, redirectURI)
+	client, err := pkceflow.New(pkceflow.Config{
+		IssuerURL:   idp.IssuerURL(),
+		ClientID:    "test-app",
+		GracePeriod: 30 * 24 * time.Hour,
+	}, handler,
+		pkceflow.WithTokenPersistence(store),
+		pkceflow.WithEventEmitter(emitter),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := client.Init(ctx); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := client.Login(ctx); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	before, err := store.Load()
+	if err != nil {
+		t.Fatalf("load before refresh: %v", err)
+	}
+	emitter.Reset()
+
+	if got := client.AccessToken(ctx); got != "" {
+		t.Fatalf("AccessToken after rejected refresh = %q, want empty", got)
+	}
+	if emitter.HasEvent(pkceflow.EventTokenRefreshed) {
+		t.Fatal("EventTokenRefreshed emitted after rejected refreshed ID token")
+	}
+
+	after, err := store.Load()
+	if err != nil {
+		t.Fatalf("load after refresh: %v", err)
+	}
+	if after.AccessToken != before.AccessToken {
+		t.Error("rejected refreshed ID token still updated access token")
+	}
+	if after.IDToken != before.IDToken {
+		t.Error("rejected refreshed ID token replaced the previous ID token")
+	}
+}
+
+func TestRefresh_RejectsCurrentIDTokenWithoutSubject(t *testing.T) {
+	redirectURI := "http://127.0.0.1:9999/callback"
+	idp := oidctest.NewFakeIDP(t,
+		oidctest.WithClientID("test-app"),
+		oidctest.WithRedirectURI(redirectURI),
+		oidctest.WithAccessTTL(5*time.Second), // beyond the 30s freshness buffer
+	)
+
+	store := &oidctest.MemoryStore{}
+	emitter := &oidctest.RecordingEmitter{}
+	handler := oidctest.NewFakeFlowHandler(idp, redirectURI)
+	client, err := pkceflow.New(pkceflow.Config{
+		IssuerURL: idp.IssuerURL(),
+		ClientID:  "test-app",
+	}, handler,
+		pkceflow.WithTokenPersistence(store),
+		pkceflow.WithEventEmitter(emitter),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := client.Init(ctx); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := client.Login(ctx); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	before, err := store.Load()
+	if err != nil {
+		t.Fatalf("load before refresh: %v", err)
+	}
+	before.IDToken = unsignedIDToken(`{"iss":"` + idp.IssuerURL() + `","aud":"test-app"}`)
+	if err := store.Save(before); err != nil {
+		t.Fatalf("save modified state: %v", err)
+	}
+	if !client.RestoreSession() {
+		t.Fatal("RestoreSession failed after modifying stored ID token")
+	}
+	emitter.Reset()
+
+	if got := client.AccessToken(ctx); got != "" {
+		t.Fatalf("AccessToken after subjectless current ID token = %q, want empty", got)
+	}
+	if emitter.HasEvent(pkceflow.EventTokenRefreshed) {
+		t.Fatal("EventTokenRefreshed emitted after subjectless current ID token")
+	}
+
+	after, err := store.Load()
+	if err != nil {
+		t.Fatalf("load after refresh: %v", err)
+	}
+	if after.IDToken != before.IDToken {
+		t.Error("subjectless current ID token was replaced during rejected refresh")
+	}
+}
+
+func TestRefreshLoop_IDTokenIntegrityFailure_EmitsSessionExpiredDespiteGrace(t *testing.T) {
+	redirectURI := "http://127.0.0.1:9999/callback"
+	idp := oidctest.NewFakeIDP(t,
+		oidctest.WithClientID("test-app"),
+		oidctest.WithRedirectURI(redirectURI),
+		oidctest.WithRawRefreshIDToken("not.a.jwt"),
+	)
+
+	store := &oidctest.MemoryStore{}
+	emitter := &oidctest.RecordingEmitter{}
+	handler := oidctest.NewFakeFlowHandler(idp, redirectURI)
+	client, err := pkceflow.New(pkceflow.Config{
+		IssuerURL:   idp.IssuerURL(),
+		ClientID:    "test-app",
+		GracePeriod: 30 * 24 * time.Hour,
+	}, handler,
+		pkceflow.WithTokenPersistence(store),
+		pkceflow.WithEventEmitter(emitter),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if err := client.Init(context.Background()); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := client.Login(context.Background()); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	emitter.Reset()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client.StartRefreshLoop(ctx)
+	defer client.StopRefreshLoop()
+
+	waitForEvent(t, emitter, pkceflow.EventSessionExpired, 2*time.Second)
+	if emitter.HasEvent(pkceflow.EventTokenRefreshed) {
+		t.Fatal("EventTokenRefreshed emitted after malformed refreshed ID token")
+	}
+}
+
+func TestRefresh_RejectsMalformedIDToken(t *testing.T) {
+	redirectURI := "http://127.0.0.1:9999/callback"
+	idp := oidctest.NewFakeIDP(t,
+		oidctest.WithClientID("test-app"),
+		oidctest.WithRedirectURI(redirectURI),
+		oidctest.WithAccessTTL(5*time.Second), // beyond the 30s freshness buffer
+		oidctest.WithRawRefreshIDToken("not.a.jwt"),
+	)
+
+	store := &oidctest.MemoryStore{}
+	emitter := &oidctest.RecordingEmitter{}
+	handler := oidctest.NewFakeFlowHandler(idp, redirectURI)
+	client, err := pkceflow.New(pkceflow.Config{
+		IssuerURL: idp.IssuerURL(),
+		ClientID:  "test-app",
+	}, handler,
+		pkceflow.WithTokenPersistence(store),
+		pkceflow.WithEventEmitter(emitter),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := client.Init(ctx); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := client.Login(ctx); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	before, err := store.Load()
+	if err != nil {
+		t.Fatalf("load before refresh: %v", err)
+	}
+	emitter.Reset()
+
+	if got := client.AccessToken(ctx); got != "" {
+		t.Fatalf("AccessToken after malformed refreshed ID token = %q, want empty", got)
+	}
+	if emitter.HasEvent(pkceflow.EventTokenRefreshed) {
+		t.Fatal("EventTokenRefreshed emitted after malformed refreshed ID token")
+	}
+
+	after, err := store.Load()
+	if err != nil {
+		t.Fatalf("load after refresh: %v", err)
+	}
+	if after.AccessToken != before.AccessToken {
+		t.Error("malformed refreshed ID token still updated access token")
+	}
+	if after.IDToken != before.IDToken {
+		t.Error("malformed refreshed ID token replaced the previous ID token")
+	}
+}
+
+func TestNew_FreezesMutableConfigFields(t *testing.T) {
+	redirectURI := "http://127.0.0.1:9999/callback"
+	idp := oidctest.NewFakeIDP(t,
+		oidctest.WithClientID("test-app"),
+		oidctest.WithRedirectURI(redirectURI),
+	)
+
+	scopes := []string{"openid"}
+	authParams := map[string]string{"prompt": "login"}
+	tokenParams := map[string]string{"requested_token_use": "on_behalf_of"}
+	spy := &spyLogoutHandler{inner: oidctest.NewFakeFlowHandler(idp, redirectURI)}
+
+	client, err := pkceflow.New(pkceflow.Config{
+		IssuerURL:        idp.IssuerURL(),
+		ClientID:         "test-app",
+		Scopes:           scopes,
+		ExtraAuthParams:  authParams,
+		ExtraTokenParams: tokenParams,
+	}, spy, pkceflow.WithTokenPersistence(&oidctest.MemoryStore{}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	scopes[0] = "profile"
+	authParams["nonce"] = "attacker-nonce"
+	authParams["client_secret"] = "auth-secret"
+	tokenParams["code_verifier"] = "attacker-verifier"
+	tokenParams["client_secret"] = "token-secret"
+
+	ctx := context.Background()
+	if err := client.Init(ctx); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if err := client.Login(ctx); err != nil {
+		t.Fatalf("Login failed after mutating caller-owned config fields: %v", err)
+	}
+
+	if len(spy.startAuthURLs) != 1 {
+		t.Fatalf("StartAuthFlow called %d times, want 1", len(spy.startAuthURLs))
+	}
+	authURL, err := url.Parse(spy.startAuthURLs[0])
+	if err != nil {
+		t.Fatalf("parse auth URL: %v", err)
+	}
+	q := authURL.Query()
+	if got := q.Get("scope"); got != "openid" {
+		t.Errorf("scope = %q, want openid", got)
+	}
+	if got := q.Get("nonce"); got == "attacker-nonce" {
+		t.Error("caller mutation changed nonce after New")
+	}
+	if got := q.Get("client_secret"); got != "" {
+		t.Errorf("client_secret leaked into auth URL after caller mutation: %q", got)
 	}
 }
 
