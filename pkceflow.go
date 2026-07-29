@@ -7,14 +7,14 @@ import (
 
 const minRefreshInterval = 10 * time.Second
 
-// StartRefreshLoop starts a background goroutine that refreshes the access token
-// before it expires, using DHCP-style adaptive timing.
+// StartRefreshLoop starts a background goroutine that refreshes the access token.
 //
 // The loop attempts an immediate refresh on start (to ensure freshness after
 // RestoreSession), then sleeps for max(timeUntilExpiry/2, 10s) between attempts.
 //
-// On permanent error (e.g., refresh token revoked), the loop stops and emits
-// EventSessionExpired (unless grace period is still active).
+// A session-integrity error stops the loop and emits EventSessionExpired
+// immediately. Other permanent errors stop and emit that event after any
+// configured grace period expires. Temporary errors continue retrying.
 //
 // Calling StartRefreshLoop again stops the previous loop.
 // Use StopRefreshLoop for explicit shutdown.
@@ -105,7 +105,7 @@ func (c *Client) doRefresh(ctx context.Context) bool {
 	return true
 }
 
-// nextRefreshInterval calculates the DHCP-style sleep duration.
+// nextRefreshInterval calculates the adaptive sleep duration.
 // sleep = max(timeUntilExpiry / 2, minRefreshInterval)
 func (c *Client) nextRefreshInterval() time.Duration {
 	c.mu.Lock()

@@ -1,8 +1,9 @@
 // Package filestore provides AES-256-GCM encrypted file-based token persistence.
 //
-// This is the default TokenPersistence implementation for go-pkceflow.
-// It encrypts tokens at rest using a key derived from the app ID and machine ID,
-// with a fallback to a persisted random key when machine ID is unavailable.
+// This is the included file-based TokenPersistence implementation for
+// go-pkceflow. Clients use in-memory persistence unless a store is injected.
+// Store encrypts tokens at rest using a key derived from the app ID and machine
+// ID, with a fallback to a persisted random key when machine ID is unavailable.
 //
 // Usage:
 //
@@ -23,7 +24,7 @@
 //
 // AES-256-GCM at rest, together with per-user file permissions on desktop and
 // the application sandbox on mobile, is sufficient for storing typical OIDC
-// tokens. This default deliberately favours a dependency-free, CGo-free,
+// tokens. This implementation deliberately favours a dependency-free, CGo-free,
 // cross-platform implementation over an OS credential manager.
 //
 // The encryption primarily protects tokens against disk or backup exposure and

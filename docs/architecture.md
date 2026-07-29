@@ -18,7 +18,7 @@ go-pkceflow                         Core library (framework-agnostic)
   claims.go                         ID token claims decoding (Claims, DecodeIDToken)
   desktopflow/                      Localhost callback broker + system browser (implements AuthFlowHandler, LogoutFlowHandler)
   mobileflow/                       Channel-based handler for deep link callbacks
-  filestore/                        AES-256-GCM encrypted file (default TokenPersistence)
+  filestore/                        Optional AES-256-GCM file persistence
   eventbus/                         DeferredEventBus, NoopEventBus utilities
   oidctest/                         FakeIDPServer, test doubles, assertion helpers
 
@@ -27,9 +27,11 @@ storage is behind the TokenPersistence interface, adding it later is additive
 and does not break the API.
 
 wails-pkceflow                      Wails v3 wrapper (depends on go-pkceflow)
-  wailspkceflow.go                  AuthService (Wails service lifecycle adapter)
-  events.go                         WailsEventBus, DeferredWailsEventBus
-  deeplink.go                       Deep link router for mobile callbacks
+  wailspkceflow.go                  Options, AuthService, lifecycle, deep-link subscription
+  emitter.go                        Core EventEmitter -> Wails application events
+  result.go                         Frontend-safe AuthResult mapping
+  claims.go                         Frontend-safe ID token claims DTO
+  examples/wails-desktop/           Runnable app with a safe bound delegator
 ```
 
 ## Core Interfaces
@@ -73,9 +75,12 @@ name. It never binds a wildcard address.
 
 `Client.Claims()` decodes the current session's ID token into a `Claims` struct
 (standard OIDC claims plus a `Raw` map for provider-specific fields). The
-signature is not re-verified: go-oidc already verified it during the token
-exchange, so this only inspects an already-trusted token. Access tokens are
-never decoded because they are opaque to clients per RFC 6750.
+signature is not re-verified by `Claims`: go-oidc already verified the token
+during login or refresh, so this only inspects an already-trusted token. A
+refresh response may omit `id_token`, in which case the previously verified
+token is retained. If a refresh includes one, it is verified and must keep the
+same non-empty `sub` claim. Access tokens are never decoded because they are
+opaque to clients per RFC 6750.
 
 ## Auth Flow (PKCE S256)
 
@@ -84,26 +89,49 @@ never decoded because they are opaque to clients per RFC 6750.
 3. Client builds authorization URL with challenge, state, nonce, scopes, extra params
 4. AuthFlowHandler opens URL in system browser and waits for callback
 5. Client validates state (constant-time compare), checks for error params
-6. Client exchanges authorization code for tokens (with PKCE verifier)
-7. Client validates ID token signature via OIDC discovery JWKS
+6. Client exchanges the authorization code with the PKCE verifier, sending the
+   public `client_id` in the form body without a secret or HTTP Basic probe
+7. Client validates the ID token issuer, audience, signature, and expiry via
+   the discovery JWKS
 8. Client validates the ID token nonce claim (constant-time compare)
-9. Client persists token state and emits login event
+9. Client persists token state and emits the logged-in event
 
 ## Token Lifecycle
 
-```
-[No Session] --Login()--> [Authenticated]
-[Authenticated] --token expiring--> [Refreshing] --success--> [Authenticated]
-[Refreshing] --failure (temporary)--> [Grace Mode] --retry--> [Refreshing]
-[Refreshing] --failure (permanent)--> [Expired]
-[Grace Mode] --grace period exceeded--> [Expired]
-[Any state] --Logout()--> [No Session]
-```
+`AuthStatus` is computed from the in-memory `TokenState`:
 
-The background refresh loop uses DHCP-style adaptive timing:
-- Sleep duration = max(time_remaining / 2, 10 seconds)
-- On failure: halve the interval (faster retries)
-- On permanent error (invalid_grant): stop loop, emit session-expired
+- `Valid` means the access token expires more than 30 seconds from now.
+- `GraceMode` means the token is no longer valid but the configured grace
+  period, measured from the last successful login or refresh, has not ended.
+- `CanUseApp` is `Valid || GraceMode`. Grace controls application usability; it
+  does not make an expired access token acceptable to an API.
+
+`AccessToken` returns a valid token immediately. Inside the 30-second expiry
+buffer it attempts one refresh when discovery is initialized and a refresh
+token exists. If a normal refresh error occurs, it may return the previous
+token while grace is active. A session-integrity failure always fails closed,
+even during grace.
+
+The background loop currently:
+
+1. attempts a refresh immediately when started, which refreshes restored
+   sessions eagerly;
+2. after each attempt, sleeps for
+   `max(time_until_access_token_expiry / 2, 10 seconds)`;
+3. resets the schedule from the new expiry after success;
+4. keeps retrying temporary failures and permanent OAuth errors while grace is
+   active;
+5. emits `oidcauth:session-expired` and stops when a permanent OAuth error is
+   outside grace, or immediately on a session-integrity failure.
+
+Issue [#55](https://github.com/GyldendalDigital/go-pkceflow/issues/55) tracks
+the remaining scheduler correction: make the 50%, 25%, 12.5% retry stages
+explicit and stop network refresh attempts once the access token has expired.
+Expiry must not force a login; `AuthStatus` and the configured grace period
+continue to decide whether the app is usable.
+
+Every successful refresh emits `oidcauth:token-refreshed`, including a refresh
+triggered synchronously by `AccessToken`.
 
 ## Platform Support
 
@@ -124,12 +152,17 @@ additional TokenPersistence implementation without changing the core API.
 - State parameter: 32 bytes from crypto/rand, compared with subtle.ConstantTimeCompare
 - Nonce parameter: 32 bytes from crypto/rand, always sent and validated against the ID token nonce claim with subtle.ConstantTimeCompare (OIDC replay protection)
 - Tokens never logged at any level
+- Public-client token requests send `client_id` in the form body and never send
+  a client secret or probe HTTP Basic authentication
 - Localhost server binds loopback only (127.0.0.1, and [::1] for the localhost host), never a wildcard address
 - File-based token encryption: AES-256-GCM with random nonce per write
 - Key derivation: SHA-256(appID + machineID); fallback to persisted random key file
 - Redirect URIs: loopback IP literal per RFC 8252 (desktop), claimed HTTPS (mobile)
+- Refreshed ID tokens are verified and cannot silently change the session subject
+- Extra parameter maps cannot override library-owned OAuth/OIDC/PKCE fields or
+  introduce a client secret
 
-Token storage security model: the default filestore encrypts tokens with
+Token storage security model: the included filestore encrypts tokens with
 AES-256-GCM and relies on per-user file permissions (desktop) or the application
 sandbox (mobile). This is sufficient for typical OIDC tokens and keeps the
 default dependency-free and CGo-free. Consumers needing stricter handling (an OS
@@ -138,14 +171,19 @@ the `TokenPersistence` interface and inject it via `WithTokenPersistence`; no
 other change is required. An OS-native store may also be added to the library as
 an additional backend later without breaking the API.
 
-## IdP Compatibility
+## Provider Status
 
-Designed and tested for:
-- Keycloak (primary, production-tested)
-- Microsoft Entra ID (needs ExtraAuthParams for prompt/audience)
-- Auth0 (needs audience parameter)
-- Okta (standard OIDC)
-- Google (needs access_type=offline instead of offline_access scope)
+| Provider | Project status | Notes |
+|----------|----------------|-------|
+| Keycloak | Manually validated | Linux: login, exchange, repeated refresh, logout. Windows: login, exchange, repeated refresh; logout not yet tested |
+| Auth0 | Configuration guide | Native-app PKCE is expected to work; API audience and refresh policy are provider settings |
+| Microsoft Entra ID | Configuration guide | Use a tenant-specific v2 issuer and a public native-app registration |
+| Other OIDC providers | Compatibility checklist | Expected when discovery, PKCE S256, public token exchange, nonce-bearing ID tokens, and matching redirects are supported |
+
+Only Keycloak has completed a project-owned live-provider run so far. Automated
+tests use `oidctest.FakeIDPServer`; they do not prove a provider's console
+configuration or operational quirks. See the
+[generic OIDC checklist](idp-setup-generic-oidc.md) for the actual contract.
 
 ## Design Decisions
 
@@ -155,7 +193,7 @@ Designed and tested for:
 | Separate repos for core and wrapper | Independent versioning, clear dependency direction |
 | Interfaces over concrete types | Testability, platform flexibility |
 | No mobile AuthFlowHandler in library | Deep link setup is app-specific; library provides the channel-based handler, consumer wires the platform bridge |
-| Filestore as the default store | No external service or platform toolchain required; works headless and cross-compiles without CGo |
+| In-memory default; optional filestore | Minimal clients need no filesystem; persistent apps can inject the CGo-free encrypted store |
 | OS keyring deferred to a future backend | The TokenPersistence interface allows adding it later without breaking changes |
 | Random persistent key (not hostname) | Hostname changes don't invalidate tokens |
 | DeferredEventBus pattern | Solves Wails startup ordering (services created before app is ready) |

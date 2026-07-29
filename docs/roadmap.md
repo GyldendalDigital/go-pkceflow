@@ -1,6 +1,6 @@
 # Roadmap
 
-Current status: **Early development** (pre-release)
+Current status: **Pre-1.0 beta hardening**
 
 ## Milestones
 
@@ -49,11 +49,11 @@ Current status: **Early development** (pre-release)
 
 - [x] Mobile flow handler (StartAuthFlow + DeliverURL)
 
-### M7: Refresh Loop and Event Bus (in progress)
+### M7: Refresh Loop and Event Bus ✓
 > Background token refresh and event utilities.
 
 - [x] Event bus utilities (DeferredEventBus, NoopEventBus)
-- [x] Background refresh loop (DHCP-style timing)
+- [x] Background refresh loop with adaptive timing
 
 ### M8: Integration ✓
 > First working end-to-end desktop login, hardened for real-world IdPs.
@@ -76,28 +76,41 @@ Current status: **Early development** (pre-release)
 - [x] Token storage security model + bring-your-own TokenPersistence guidance
 - [x] Council review hardening: refresh errors classified as permanent (EventSessionExpired fires on revoked tokens), EventInitFailed emitted, unused API removed, Windows browser opener, config/URL validation
 
-### M9: wails-pkceflow Wrapper
+### M9: wails-pkceflow Wrapper ✓
 > Wails v3 service adapter and event bridge.
 
 - [x] Initialize wails-pkceflow module
-- [ ] Wails auth service adapter
-- [ ] Wails event bridge
-- [ ] Deep link router (mobile)
+- [x] Wails auth service adapter
+- [x] Wails event bridge
+- [x] Deep link router (mobile; real-device validation remains)
 
-### M10: Documentation and Release
+### M10: Documentation and Release (in progress)
 > Examples, guides, and v1.0 release prep.
 
-- [ ] README examples and getting started
-- [ ] IdP setup guides: Keycloak (done), Auth0 (done), Entra ID, generic OIDC provider
-- [ ] Wails integration guide
+- [x] README examples and getting started
+- [x] IdP setup guides: Keycloak, Auth0, Entra ID, generic OIDC provider
+- [x] Wails integration guide
 - [x] Example: CLI app
-- [ ] Example: Wails desktop app
+- [x] Example: Wails desktop app with Dockerized Keycloak
 - [ ] Release v1.0.0
 - [ ] v1.0.0-beta.1 release
 
+## Before Dogfooding
+
+- [ ] Complete coverage and edge-path hardening
+  ([#43](https://github.com/GyldendalDigital/go-pkceflow/issues/43)).
+- [ ] Correct the refresh scheduler so retries follow explicit 50%, 25%, 12.5%
+  lifetime stages and stop at access-token expiry
+  ([#55](https://github.com/GyldendalDigital/go-pkceflow/issues/55)).
+- [ ] Harden mobile callback filtering and active-flow handling.
+- [ ] Reconcile the wrapper dependency pin and stale completed issues.
+- [ ] Validate mobile deep-link delivery on an emulator/device
+  ([wrapper #8](https://github.com/GyldendalDigital/wails-pkceflow/issues/8)).
+
 ## Version Plan
 
-- `v0.9.x-alpha/beta` -- Feature-complete but unproven against real IdPs, devices, and OSes
+- `v0.9.x-alpha/beta` -- Feature-complete core; Keycloak validated on Linux and
+  Windows, with remaining hardening and platform/provider validation
 - `v1.0.0-beta.x` -- Feature-complete, validated, seeking feedback
 - `v1.0.0-rc.x` -- API frozen, bug fixes only
 - `v1.0.0` -- Stable release

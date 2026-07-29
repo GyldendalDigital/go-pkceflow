@@ -44,6 +44,7 @@ type Client struct {
 //   - WithTokenPersistence: default is in-memory (lost on restart)
 //   - WithEventEmitter: default is no-op (events silently dropped)
 //   - WithLogger: default is slog.Default()
+//   - WithHTTPClient: default is the standard HTTP client
 func New(cfg Config, flow AuthFlowHandler, opts ...Option) (*Client, error) { //nolint:gocritic // hugeParam: intentionally by value so Validate() doesn't mutate caller's copy
 	if flow == nil {
 		return nil, errors.New("pkceflow: AuthFlowHandler is required")

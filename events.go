@@ -20,7 +20,8 @@ const (
 	// EventLoggedOut is emitted after Logout() clears auth state.
 	EventLoggedOut = "oidcauth:logged-out"
 
-	// EventTokenRefreshed is emitted after a successful background token refresh.
+	// EventTokenRefreshed is emitted after any successful token refresh,
+	// including one triggered synchronously by AccessToken.
 	EventTokenRefreshed = "oidcauth:token-refreshed" //nolint:gosec // G101 false positive: not a credential
 
 	// EventSessionExpired is emitted when the refresh token is permanently

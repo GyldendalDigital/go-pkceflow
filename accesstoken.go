@@ -10,10 +10,11 @@ import "context"
 // subject, never return the expired token from grace mode.
 //
 // AccessToken never returns an error: a failed refresh is logged at debug level
-// and surfaces as an empty string. It also does not emit events; only the
-// background refresh loop (StartRefreshLoop) emits EventSessionExpired on a
-// permanent failure. Consumers that need to distinguish "expired" from "never
-// authenticated" should consult AuthStatus.
+// and surfaces as an empty string. A successful refresh emits
+// EventTokenRefreshed, whether triggered here or by the background loop. Only
+// the background refresh loop emits EventSessionExpired on a permanent failure.
+// Consumers that need to distinguish "expired" from "never authenticated"
+// should consult AuthStatus.
 func (c *Client) AccessToken(ctx context.Context) string {
 	c.mu.Lock()
 	state := c.state

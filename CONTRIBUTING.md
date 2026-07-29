@@ -35,8 +35,8 @@ chore: bump go-oidc v3.18.0 to v3.19.0
 
 ## Development Requirements
 
-- Go 1.26 or later
-- No CGo required for core library (CGo used only behind build tags for platform-specific stores)
+- Go 1.25 or later
+- No CGo required for the core library
 
 ## Running Tests
 
@@ -71,6 +71,20 @@ If you discover a security vulnerability, please report it privately via GitHub'
 3. Update documentation if your change affects the public API
 4. Fill out the PR template completely
 5. One logical change per PR
+
+## Documentation Checklist
+
+When public API or behavior changes:
+
+1. Check the root README and package `doc.go` examples.
+2. Check `docs/how-it-works.md` and `docs/architecture.md` for lifecycle or
+   security claims.
+3. Check provider guides when scopes, redirects, token authentication, refresh,
+   or logout behavior changes.
+4. Check the paired wails-pkceflow README, package docs, and example when the
+   wrapper-facing contract changes.
+5. Update the roadmap and clearly distinguish automated, expected, and manually
+   validated provider/platform support.
 
 ## License
 

@@ -63,15 +63,15 @@ sequenceDiagram
     participant IdP as Identity provider
 
     App->>App: Generate PKCE verifier + challenge
-    App->>App: Generate random state (anti-CSRF)
-    App->>Browser: Open authorization URL (with challenge + state)
+    App->>App: Generate random state + nonce
+    App->>Browser: Open authorization URL (challenge + state + nonce)
     Browser->>IdP: User authenticates (password, MFA, SSO)
     IdP->>Browser: Redirect to redirect URI (with code + state)
     Browser->>App: Deliver code + state (localhost or deep link)
     App->>App: Verify state matches (constant-time compare)
     App->>IdP: Exchange code + verifier for tokens
     IdP->>App: Access token, ID token, refresh token
-    App->>App: Verify ID token signature, persist tokens
+    App->>App: Verify ID token + nonce, persist tokens
 ```
 
 The two native-specific steps ("Deliver code + state" and how the browser is
@@ -103,10 +103,19 @@ After a successful login the app holds up to three tokens:
   decode it.
 - **Refresh token**: used to silently get a new access token when the old one
   expires, so the user does not have to log in again. go-pkceflow's background
-  refresh loop does this for you.
+  refresh loop does this for you. A provider only returns one when its native
+  client and scope settings allow it.
 - **ID token**: a signed statement describing *who* the user is (name, email,
   subject id). This one is meant to be read. `client.Claims()` decodes it for
-  you. See [`claims.go`](../claims.go).
+  you after the library has verified it. See [`claims.go`](../claims.go).
+
+go-pkceflow requests `openid profile email offline_access` by default. The
+first three request sign-in and profile claims. `offline_access` asks for a
+refresh token, but providers apply their own policy: Keycloak also needs the
+offline-access client scope and role mapping, Auth0 may need offline access
+enabled for the target API, and some providers use a different authorization
+parameter. The [provider setup guides](idp-setup-generic-oidc.md) explain what
+to check.
 
 ## Logging out
 
@@ -119,12 +128,19 @@ from the login redirect URI. go-pkceflow supports configuring a distinct logout
 callback path, and correlates the logout round-trip with a `state` value just
 like login.
 
+Browser logout is not the same as token revocation. go-pkceflow clears its
+in-memory state and asks the configured persistence backend to delete its copy;
+a deletion failure is logged because browser/local logout otherwise continues.
+The library does not call a provider revocation endpoint. A provider may keep
+the discarded refresh/offline grant valid until its own expiry or
+administrative revocation policy ends it.
+
 ## What this library solves
 
 - Public-client PKCE login and logout for desktop and mobile (no client secret).
 - Opening the system browser and capturing the callback on each platform.
 - Encrypted, pluggable token storage.
-- Automatic, adaptive background token refresh with an offline grace period.
+- Automatic background token refresh with an optional offline grace period.
 - RP-Initiated Logout with post-logout redirect correlation.
 - Reading ID token claims.
 - Testing without a real IdP (the `oidctest` package).
@@ -158,6 +174,8 @@ like login.
 - **State**: a random value the app sends and expects back unchanged, to detect
   cross-site request forgery and to match a callback to the flow that started
   it.
+- **Nonce**: a second random value carried inside the signed ID token. It binds
+  that token to the login request and detects replay or token injection.
 - **Access / refresh / ID token**: see [What the tokens are
   for](#what-the-tokens-are-for).
 - **End-session endpoint**: the IdP URL used to log the user out of the IdP
@@ -167,5 +185,7 @@ like login.
 
 - Set up a local IdP to try it: [Keycloak guide](idp-setup-keycloak.md).
 - Use a hosted IdP: [Auth0 guide](idp-setup-auth0.md).
+- Use Microsoft identity: [Entra ID guide](idp-setup-entra.md).
+- Check another provider: [generic OIDC guide](idp-setup-generic-oidc.md).
 - Ship on phones: [mobile deep linking](mobile-deep-linking.md).
 - Understand the internals: [architecture](architecture.md).
