@@ -21,16 +21,22 @@ func (c *Client) Logout(ctx context.Context) error {
 		defer cancel()
 	}
 
+	c.stateCommitMu.Lock()
 	c.mu.Lock()
 	idToken := c.state.IDToken
 	endSessionEndpoint := c.endSessionEndpoint
-	// Clear in-memory state immediately
-	c.state = TokenState{}
+	// Clear in-memory state immediately.
+	c.setStateLocked(TokenState{})
 	c.mu.Unlock()
+	persistErr := c.store.Delete()
+	shouldDrain := c.enqueueEvent(EventLoggedOut, nil)
+	c.stateCommitMu.Unlock()
 
-	// Delete persisted tokens
-	if err := c.store.Delete(); err != nil {
-		c.logger.Warn("failed to delete persisted tokens", "error", err)
+	if persistErr != nil {
+		c.logger.Warn("failed to delete persisted tokens", "error", persistErr)
+	}
+	if shouldDrain {
+		c.drainEvents()
 	}
 
 	// RP-Initiated Logout if supported
@@ -38,7 +44,6 @@ func (c *Client) Logout(ctx context.Context) error {
 		c.doRPLogout(ctx, endSessionEndpoint, idToken)
 	}
 
-	c.emitter.Emit(EventLoggedOut, nil)
 	return nil
 }
 

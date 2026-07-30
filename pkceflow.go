@@ -7,6 +7,12 @@ import (
 
 const minRefreshInterval = 10 * time.Second
 
+type refreshLoopHandle struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
 // StartRefreshLoop starts a background goroutine that refreshes the access token.
 //
 // The loop attempts an immediate refresh on start (to ensure freshness after
@@ -19,27 +25,56 @@ const minRefreshInterval = 10 * time.Second
 // Calling StartRefreshLoop again stops the previous loop.
 // Use StopRefreshLoop for explicit shutdown.
 func (c *Client) StartRefreshLoop(ctx context.Context) {
-	c.StopRefreshLoop() // stop any existing loop
-
-	loopCtx, cancel := context.WithCancel(ctx)
-
-	c.mu.Lock()
-	c.refreshCancel = cancel
-	c.mu.Unlock()
-
-	go c.refreshLoop(loopCtx)
+	c.startRefreshLoop(ctx, c.refreshLoop)
 }
 
-// StopRefreshLoop stops the background refresh loop if one is running.
-func (c *Client) StopRefreshLoop() {
+func (c *Client) startRefreshLoop(
+	ctx context.Context,
+	run func(context.Context),
+) *refreshLoopHandle {
+	loopCtx, cancel := context.WithCancel(ctx)
+	handle := &refreshLoopHandle{
+		ctx:    loopCtx,
+		cancel: cancel,
+		done:   make(chan struct{}),
+	}
+
 	c.mu.Lock()
-	cancel := c.refreshCancel
-	c.refreshCancel = nil
+	previous := c.refreshRun
+	c.refreshRun = handle
+	if previous != nil {
+		previous.cancel()
+	}
 	c.mu.Unlock()
 
-	if cancel != nil {
-		cancel()
+	go func() {
+		defer func() {
+			c.mu.Lock()
+			if c.refreshRun == handle {
+				c.refreshRun = nil
+			}
+			c.mu.Unlock()
+			close(handle.done)
+		}()
+
+		if loopCtx.Err() != nil {
+			return
+		}
+		run(loopCtx)
+	}()
+
+	return handle
+}
+
+// StopRefreshLoop cancels the background refresh loop if one is running. It
+// does not wait for the loop goroutine to finish.
+func (c *Client) StopRefreshLoop() {
+	c.mu.Lock()
+	handle := c.refreshRun
+	if handle != nil {
+		handle.cancel()
 	}
+	c.mu.Unlock()
 }
 
 func (c *Client) refreshLoop(ctx context.Context) {
@@ -65,6 +100,7 @@ func (c *Client) refreshLoop(ctx context.Context) {
 func (c *Client) doRefresh(ctx context.Context) bool {
 	c.mu.Lock()
 	state := c.state
+	revision := c.stateRevision
 	isInit := c.initialized()
 	c.mu.Unlock()
 
@@ -84,7 +120,9 @@ func (c *Client) doRefresh(ctx context.Context) bool {
 	c.logger.Debug("refresh loop: refresh failed", "error", err)
 
 	if isSessionIntegrityError(err) {
-		c.emitter.Emit(EventSessionExpired, nil)
+		if !c.emitEventIfRevision(revision, EventSessionExpired, nil) {
+			return true
+		}
 		return false
 	}
 
@@ -97,7 +135,9 @@ func (c *Client) doRefresh(ctx context.Context) bool {
 			}
 		}
 		// Grace expired or disabled -- session is done
-		c.emitter.Emit(EventSessionExpired, nil)
+		if !c.emitEventIfRevision(revision, EventSessionExpired, nil) {
+			return true
+		}
 		return false
 	}
 

@@ -1,5 +1,10 @@
 package pkceflow
 
+type clientEvent struct {
+	name string
+	data any
+}
+
 // Auth lifecycle events emitted by the Client via EventEmitter.
 //
 // The typical event sequence for a successful session:
@@ -34,3 +39,64 @@ const (
 	// from RestoreSession().
 	EventInitFailed = "oidcauth:init-failed"
 )
+
+// enqueueEvent appends an event in commit order. The caller that transitions
+// eventDispatching from false to true must call drainEvents after releasing any
+// Client state locks.
+func (c *Client) enqueueEvent(event string, data any) bool {
+	c.eventMu.Lock()
+	defer c.eventMu.Unlock()
+
+	c.pendingEvents = append(c.pendingEvents, clientEvent{name: event, data: data})
+	if c.eventDispatching {
+		return false
+	}
+	c.eventDispatching = true
+	return true
+}
+
+// drainEvents serializes emitter calls without holding Client state locks.
+// Reentrant Client operations append to the active queue and return; this
+// drainer delivers their events after the current callback completes.
+func (c *Client) drainEvents() {
+	for {
+		c.eventMu.Lock()
+		if len(c.pendingEvents) == 0 {
+			c.eventDispatching = false
+			c.eventMu.Unlock()
+			return
+		}
+		event := c.pendingEvents[0]
+		c.pendingEvents[0] = clientEvent{}
+		c.pendingEvents = c.pendingEvents[1:]
+		c.eventMu.Unlock()
+
+		c.emitter.Emit(event.name, event.data)
+	}
+}
+
+func (c *Client) emitEvent(event string, data any) {
+	if c.enqueueEvent(event, data) {
+		c.drainEvents()
+	}
+}
+
+// emitEventIfRevision atomically orders a refresh-derived event against newer
+// state commits. A false result means the refresh generation was superseded.
+func (c *Client) emitEventIfRevision(revision uint64, event string, data any) bool {
+	c.stateCommitMu.Lock()
+	c.mu.Lock()
+	current := c.stateRevision == revision
+	c.mu.Unlock()
+
+	var shouldDrain bool
+	if current {
+		shouldDrain = c.enqueueEvent(event, data)
+	}
+	c.stateCommitMu.Unlock()
+
+	if shouldDrain {
+		c.drainEvents()
+	}
+	return current
+}

@@ -50,6 +50,10 @@ type LogoutFlowHandler interface {
 // keyring or Keychain, a hardware-backed keystore, or a secure enclave) can
 // implement this interface and inject it via WithTokenPersistence, with no other
 // code changes.
+//
+// Client serializes calls to these methods with token-state transitions.
+// Implementations must not synchronously call back into Client methods that can
+// mutate or refresh token state.
 type TokenPersistence interface {
 	// Save persists the token state. Called after login and token refresh.
 	Save(state TokenState) error
@@ -64,6 +68,10 @@ type TokenPersistence interface {
 
 // EventEmitter emits auth lifecycle events. Consumers provide an implementation
 // that bridges to their framework's event system (e.g., Wails app events).
+// Client serializes Emit calls in token-state commit order and does not hold its
+// state or persistence locks while invoking the implementation. An event queued
+// while another callback is active may be delivered after its originating
+// Client operation returns.
 type EventEmitter interface {
 	// Emit sends a named event with optional associated data.
 	Emit(event string, data any)

@@ -150,15 +150,20 @@ func (c *Client) Login(ctx context.Context) error {
 		LastAuthAt:   now,
 	}
 
+	c.stateCommitMu.Lock()
 	c.mu.Lock()
-	c.state = newState
+	c.setStateLocked(newState)
 	c.mu.Unlock()
+	persistErr := c.store.Save(newState)
+	shouldDrain := c.enqueueEvent(EventLoggedIn, nil)
+	c.stateCommitMu.Unlock()
 
-	if err := c.store.Save(newState); err != nil {
-		c.logger.Warn("failed to persist tokens after login", "error", err)
+	if persistErr != nil {
+		c.logger.Warn("failed to persist tokens after login", "error", persistErr)
 	}
-
-	c.emitter.Emit(EventLoggedIn, nil)
+	if shouldDrain {
+		c.drainEvents()
+	}
 	return nil
 }
 
