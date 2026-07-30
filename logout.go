@@ -84,12 +84,22 @@ func (c *Client) doRPLogout(ctx context.Context, endSessionEndpoint, idToken str
 		return
 	}
 	parsed, perr := url.Parse(callbackURL)
-	if perr != nil {
-		c.logger.Warn("failed to parse logout callback URL", "error", perr)
+	if perr != nil || !parsed.IsAbs() {
+		c.logger.Warn("failed to parse logout callback URL")
 		return
 	}
-	returned := parsed.Query().Get("state")
-	if returned != "" && subtle.ConstantTimeCompare([]byte(state), []byte(returned)) != 1 {
+	query, qerr := url.ParseQuery(parsed.RawQuery)
+	if qerr != nil {
+		c.logger.Warn("failed to parse logout callback query")
+		return
+	}
+	states, present := query["state"]
+	if !present {
+		return
+	}
+	if len(states) != 1 ||
+		states[0] == "" ||
+		subtle.ConstantTimeCompare([]byte(state), []byte(states[0])) != 1 {
 		c.logger.Warn("logout callback state mismatch")
 	}
 }

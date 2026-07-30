@@ -75,12 +75,27 @@ func (c *Client) Login(ctx context.Context) error {
 
 	// Parse callback URL
 	parsed, err := url.Parse(callbackURL)
-	if err != nil {
-		return fmt.Errorf("pkceflow: invalid callback URL: %w", err)
+	if err != nil || !parsed.IsAbs() {
+		return fmt.Errorf("pkceflow: invalid callback URL")
 	}
-	query := parsed.Query()
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return fmt.Errorf("pkceflow: invalid callback URL query")
+	}
 
-	// Check for error from IdP
+	// Validate state before processing either success or error responses. OAuth
+	// authorization errors carry state too; accepting an error first would let
+	// an unrelated callback bypass CSRF correlation.
+	returnedStates := query["state"]
+	if len(returnedStates) != 1 || returnedStates[0] == "" {
+		return ErrStateMismatch
+	}
+	returnedState := returnedStates[0]
+	if subtle.ConstantTimeCompare([]byte(state), []byte(returnedState)) != 1 {
+		return ErrStateMismatch
+	}
+
+	// Check for error from IdP only after the callback has been correlated.
 	if errCode := query.Get("error"); errCode != "" {
 		return &AuthError{
 			Code:    errCode,
@@ -88,17 +103,12 @@ func (c *Client) Login(ctx context.Context) error {
 		}
 	}
 
-	// Validate state (constant-time comparison for CSRF protection)
-	returnedState := query.Get("state")
-	if subtle.ConstantTimeCompare([]byte(state), []byte(returnedState)) != 1 {
-		return ErrStateMismatch
-	}
-
 	// Exchange authorization code for tokens
-	code := query.Get("code")
-	if code == "" {
+	codes := query["code"]
+	if len(codes) != 1 || codes[0] == "" {
 		return fmt.Errorf("pkceflow: callback missing authorization code")
 	}
+	code := codes[0]
 
 	exchangeOpts := []oauth2.AuthCodeOption{
 		oauth2.VerifierOption(pkceVerifier),

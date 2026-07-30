@@ -45,7 +45,7 @@ Current status: **Pre-1.0 beta hardening**
 - [x] Filestore (AES-256-GCM encrypted, machine-ID key derivation, pure Go)
 
 ### M6: Mobile Flow Handler ✓
-> Channel-based handler for deep link callbacks.
+> URI- and state-correlated handler for deep link callbacks.
 
 - [x] Mobile flow handler (StartAuthFlow + DeliverURL)
 

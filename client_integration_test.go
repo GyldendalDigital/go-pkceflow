@@ -42,6 +42,34 @@ func newTestClient(t *testing.T) (*pkceflow.Client, *oidctest.FakeIDPServer, *oi
 	return client, idp, store, emitter
 }
 
+type authorizationErrorFlow struct {
+	redirectURI string
+	stateMode   string
+}
+
+func (h *authorizationErrorFlow) RedirectURI() string {
+	return h.redirectURI
+}
+
+func (h *authorizationErrorFlow) StartAuthFlow(_ context.Context, authURL string) (string, error) {
+	target, _ := url.Parse(authURL)
+	state := target.Query().Get("state")
+	query := url.Values{
+		"error":             {"access_denied"},
+		"error_description": {"user cancelled"},
+	}
+	switch h.stateMode {
+	case "matching":
+		query.Set("state", state)
+	case "wrong":
+		query.Set("state", "wrong-state")
+	case "duplicate":
+		query["state"] = []string{state, "wrong-state"}
+	case "missing":
+	}
+	return h.redirectURI + "?" + query.Encode(), nil
+}
+
 func TestInit_Discovery(t *testing.T) {
 	client, _, _, _ := newTestClient(t)
 
@@ -176,6 +204,55 @@ func TestLogin_NotInitialized(t *testing.T) {
 	err := client.Login(context.Background())
 	if err == nil {
 		t.Fatal("Login without Init should fail")
+	}
+}
+
+func TestLoginValidatesStateBeforeAuthorizationError(t *testing.T) {
+	tests := []struct {
+		name      string
+		stateMode string
+		wantAuth  bool
+	}{
+		{name: "matching state preserves provider error", stateMode: "matching", wantAuth: true},
+		{name: "wrong state", stateMode: "wrong"},
+		{name: "missing state", stateMode: "missing"},
+		{name: "duplicate state", stateMode: "duplicate"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			redirectURI := "http://127.0.0.1:9999/callback"
+			idp := oidctest.NewFakeIDP(t,
+				oidctest.WithClientID("test-app"),
+				oidctest.WithRedirectURI(redirectURI),
+			)
+			handler := &authorizationErrorFlow{
+				redirectURI: redirectURI,
+				stateMode:   tt.stateMode,
+			}
+			client, err := pkceflow.New(pkceflow.Config{
+				IssuerURL: idp.IssuerURL(),
+				ClientID:  "test-app",
+			}, handler)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if err := client.Init(context.Background()); err != nil {
+				t.Fatalf("Init: %v", err)
+			}
+
+			err = client.Login(context.Background())
+			if tt.wantAuth {
+				var authErr *pkceflow.AuthError
+				if !errors.As(err, &authErr) || authErr.Code != "access_denied" {
+					t.Fatalf("Login error = %v, want access_denied AuthError", err)
+				}
+				return
+			}
+			if !errors.Is(err, pkceflow.ErrStateMismatch) {
+				t.Fatalf("Login error = %v, want ErrStateMismatch", err)
+			}
+		})
 	}
 }
 
