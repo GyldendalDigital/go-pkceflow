@@ -1,10 +1,14 @@
-# Keycloak setup (local proof of concept)
+# Keycloak setup (local development)
 
 This guide gets you a working IdP on your own machine in a few minutes, then
 walks through every field you need to configure a public client with PKCE for
 go-pkceflow. It explains the *concepts* behind each setting so the same
 knowledge transfers to any IdP. Screenshots are intentionally omitted because
 the Keycloak admin console changes between versions; the field names are stable.
+
+This is the provider configuration used for the project's manual Linux and
+Windows validation, including repeated refresh against a vanilla Docker
+Keycloak instance.
 
 ## 1. Run Keycloak
 
@@ -16,11 +20,13 @@ password, so never expose it to a network):
 docker run --rm -p 8080:8080 \
   -e KC_BOOTSTRAP_ADMIN_USERNAME=admin \
   -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
-  quay.io/keycloak/keycloak:latest start-dev
+  quay.io/keycloak/keycloak:26.0 start-dev
 ```
 
 Open http://localhost:8080 and sign in to the admin console with `admin` /
-`admin`.
+`admin`. Version `26.0` matches the runnable Wails example and the recorded
+manual validation; pin the version you certify rather than silently following
+`latest`.
 
 ## 2. Create a realm
 
@@ -61,6 +67,10 @@ client** with PKCE, which means no client secret.
 - **Direct access grants**: Off. That is the password grant, which you should
   not use.
 - **Implicit flow**: Off. Deprecated and unsupported by this library.
+
+go-pkceflow sends `client_id` in the token request body and does not send a
+client secret or try HTTP Basic authentication. Keep **Client authentication**
+off; adding a secret would turn this into a different client model.
 
 ### Enforce PKCE
 
@@ -114,7 +124,35 @@ In the client's "Settings" tab:
 - Open the "Credentials" tab, set a password, and turn **Temporary** off so you
   are not forced to change it on first login.
 
-## 6. Run go-pkceflow against it
+## 6. Allow offline access
+
+go-pkceflow requests `openid profile email offline_access` by default. In
+Keycloak, `offline_access` asks for an offline token that can refresh outside
+the normal browser SSO session. Two mappings must permit it:
+
+- Open the client's **Client scopes** tab and make sure `offline_access` is
+  assigned as an **Optional** client scope.
+- Open the test user's **Role mapping** tab and assign the realm role
+  `offline_access`.
+
+Recent Keycloak realm defaults often provide the optional client scope, but do
+not assume the user role is present. If either mapping is missing, login can
+succeed without an **offline** token. Keycloak may still return a normal refresh
+token tied to the browser SSO session, which the background loop can use until
+that online session policy ends.
+
+Keycloak offline tokens are deliberately independent of the browser SSO
+session and can remain valid after RP-Initiated Logout. go-pkceflow clears its
+in-memory state and asks the configured persistence backend to delete its copy;
+deletion failures are logged. It does not call Keycloak's revocation endpoint.
+Use Keycloak's offline-session expiry and administrative revocation controls
+when server-side revocation is part of your threat model.
+
+If your application deliberately does not need offline sessions, override
+`Config.Scopes` and omit `offline_access`. The resulting refresh-token lifetime
+then follows the provider's normal online-session policy.
+
+## 7. Run go-pkceflow against it
 
 ```bash
 go run ./examples/cli \
@@ -124,9 +162,20 @@ go run ./examples/cli \
 ```
 
 Choose "Login", authenticate as your test user in the browser, and you should
-land back on the localhost callback with a valid session. Try "Show access
-token" to see the decoded ID token claims, and "Logout" to exercise
-RP-Initiated Logout.
+land back on the localhost callback with a valid session. The CLI prints the
+configured redirect URIs and can show the verified ID token claims. Choose
+"Logout" to exercise RP-Initiated Logout.
+
+The CLI uses the library defaults. To test a different scope set, provide a
+comma-separated list:
+
+```bash
+go run ./examples/cli \
+  --issuer=http://localhost:8080/realms/demo \
+  --client-id=demo-native \
+  --port=15051 \
+  --scopes=openid,profile,email
+```
 
 ## Field-to-parameter cheat sheet
 
@@ -138,6 +187,8 @@ RP-Initiated Logout.
 | PKCE method = S256 | (always sent) | Library only does S256 |
 | Valid redirect URIs | `handler.RedirectURI()` | Must match exactly |
 | Valid post logout redirect URIs | `handler.PostLogoutRedirectURI()` | Separate list; register the logout path |
+| Optional client scope = `offline_access` | Default `Config.Scopes` | Allows the requested offline scope |
+| User realm role = `offline_access` | Provider policy | Allows Keycloak to issue an offline token |
 
 ## Troubleshooting
 
@@ -148,6 +199,17 @@ RP-Initiated Logout.
   register it. See step 4.
 - **"Client secret required"**: client authentication is On. Turn it Off to make
   the client public.
+- **Login works but no offline token arrives**: check both `offline_access`
+  mappings in step 6 and confirm the authorization request includes that scope.
+- **`invalid_grant` on code exchange**: confirm the client is public. A
+  confidential-client or Basic-auth expectation is incompatible with this
+  library.
 
 Once this works locally, the same field names and concepts apply to a hosted
-IdP such as [Auth0](idp-setup-auth0.md).
+IdP such as [Auth0](idp-setup-auth0.md), or use the
+[generic OIDC checklist](idp-setup-generic-oidc.md).
+
+## References
+
+- [Keycloak Server Administration Guide: OIDC clients and PKCE](https://www.keycloak.org/docs/latest/server_admin/)
+- [Keycloak Server Administration Guide: offline access](https://www.keycloak.org/docs/latest/server_admin/#_offline-access)

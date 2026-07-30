@@ -7,16 +7,35 @@
 // # Quick Start
 //
 //	handler := desktopflow.New(15051)
-//	store, _ := filestore.New("my-app", configDir)
+//	store, err := filestore.NewDefault("com.example.myapp")
+//	if err != nil {
+//	    return err
+//	}
 //
-//	client, _ := pkceflow.New(pkceflow.Config{
+//	client, err := pkceflow.New(pkceflow.Config{
 //	    IssuerURL: "https://your-idp.com",
 //	    ClientID:  "your-client-id",
 //	}, handler, pkceflow.WithTokenPersistence(store))
+//	if err != nil {
+//	    return err
+//	}
 //
-//	client.Init(ctx)
-//	client.Login(ctx) // opens browser
-//	token := client.AccessToken(ctx) // use in API calls
+//	client.RestoreSession()
+//	if err := client.Init(ctx); err != nil && !client.AuthStatus().CanUseApp {
+//	    return err
+//	}
+//	client.StartRefreshLoop(ctx)
+//	defer client.StopRefreshLoop()
+//
+//	if !client.AuthStatus().CanUseApp {
+//	    if err := client.Login(ctx); err != nil {
+//	        return err
+//	    }
+//	}
+//	token := client.AccessToken(ctx)
+//	if client.AuthStatus().Valid && token != "" {
+//	    // Keep the token in the Go backend for API calls.
+//	}
 //
 // # Packages
 //

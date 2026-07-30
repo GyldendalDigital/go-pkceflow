@@ -10,7 +10,9 @@ import (
 // Logout clears the authentication state and optionally triggers RP-Initiated Logout.
 // If the IdP supports end_session_endpoint and an ID token is available,
 // the user is redirected to the IdP's logout page via the AuthFlowHandler.
-// Local state is always cleared regardless of RP-Initiated Logout success.
+// In-memory state is always cleared and persistent deletion is attempted,
+// regardless of RP-Initiated Logout success. Persistence deletion failures are
+// logged and do not change the returned result.
 func (c *Client) Logout(ctx context.Context) error {
 	// Apply logout timeout
 	if c.config.LogoutTimeout > 0 {

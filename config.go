@@ -26,8 +26,8 @@ type Config struct {
 	Scopes []string
 
 	// GracePeriod allows the app to continue functioning after token refresh
-	// fails, for up to this duration since last successful authentication.
-	// Zero means grace mode is disabled.
+	// fails, for up to this duration since the last successful login or token
+	// refresh. Zero means grace mode is disabled.
 	GracePeriod time.Duration
 
 	// LoginTimeout is the maximum time to wait for the user to complete login.
@@ -44,8 +44,9 @@ type Config struct {
 	// state, scope, redirect_uri, code_challenge*, client_id, and client_secret.
 	ExtraAuthParams map[string]string
 
-	// ExtraTokenParams are additional parameters sent on the token request.
-	// Use for IdP quirks (e.g., "access_type"="offline" for Google).
+	// ExtraTokenParams are additional parameters sent on the authorization-code
+	// token exchange. They are not added to later refresh requests. Use only for
+	// provider-specific, non-standard exchange parameters.
 	// Validate rejects protected OAuth/OIDC/PKCE parameters such as grant_type,
 	// code, code_verifier, redirect_uri, client_id, and client_secret.
 	ExtraTokenParams map[string]string
