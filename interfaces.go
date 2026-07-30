@@ -7,7 +7,7 @@ import "context"
 //
 // Implementations:
 //   - desktopflow.Handler: localhost HTTP server + system browser
-//   - mobileflow.Handler: channel-based, waits for DeliverURL from deep link handler
+//   - mobileflow.Handler: state-correlated DeliverURL routing from a deep link handler
 type AuthFlowHandler interface {
 	// StartAuthFlow opens the authorization URL and waits for the callback.
 	// Returns the full callback URL including query parameters (code, state, error).

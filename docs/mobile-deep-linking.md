@@ -14,7 +14,7 @@ If you have not read the [how-it-works](how-it-works.md) overview, start there.
 sequenceDiagram
     participant App
     participant OS
-    participant Browser as In-app / system browser
+    participant Browser as External user-agent
     participant IdP
 
     App->>Browser: openURL(authURL)
@@ -28,11 +28,13 @@ sequenceDiagram
 `mobileflow.Handler` is deliberately platform-agnostic. You give it two things:
 
 - the **redirect URI** registered with the IdP, and
-- an **openURL** function that opens the auth URL (for example via
-  `ASWebAuthenticationSession` on iOS or a Chrome Custom Tab on Android).
+- an **openURL** function that opens the auth URL in an external user-agent
+  (for example `ASWebAuthenticationSession` on iOS or a Chrome Custom Tab on
+  Android). Do not use an embedded WebView for login.
 
-When the OS hands your app the redirect URL, you call `handler.DeliverURL(url)`
-and the blocked `StartAuthFlow` returns. See
+When the OS hands your app a launch URL, call `handler.DeliverURL(url)`.
+Malformed URLs and links that do not match the active flow's redirect URI and
+state are ignored, so an unrelated app link cannot unblock login. See
 [`mobileflow/mobileflow.go`](../mobileflow/mobileflow.go).
 
 ```go
@@ -47,9 +49,10 @@ handler.DeliverURL(incomingURL)
 
 ### HTTPS app links (recommended)
 
-These are ordinary `https://` URLs that you *prove ownership of*, so only your
-app can claim them. They cannot be hijacked by another app, which is why they
-are preferred for OAuth callbacks.
+These are ordinary `https://` URLs whose app association the operating system
+verifies against files hosted on your domain. Correctly verified links provide
+stronger routing assurance than custom schemes, which is why they are preferred
+for OAuth callbacks.
 
 - **iOS: Universal Links.** Host an
   `apple-app-site-association` JSON file at
@@ -83,6 +86,16 @@ IdP.
 Whatever the platform, the pattern is the same: the OS gives you a URL, you pass
 it to `DeliverURL`.
 
+It is safe to forward every launch URL from the platform integration. The
+handler accepts only the expected scheme, host, port, path, fixed redirect query
+parameters, and OAuth state. Deliveries made when no flow is active are dropped.
+Only one mobile login or logout browser flow can be active at a time; a second
+attempt returns `mobileflow.ErrFlowInProgress`.
+
+This guard protects callback routing inside the handler. It does not serialize
+all higher-level client operations, so the application should also prevent
+overlapping `Client.Login` and `Client.Logout` commands.
+
 ### iOS (SwiftUI, conceptually)
 
 ```swift
@@ -113,8 +126,11 @@ RP-Initiated Logout works the same way: the IdP redirects to a post-logout deep
 link after ending the session. Register a post-logout redirect URI with the IdP
 (a separate entry from the login callback, just like on desktop) and deliver the
 returning URL the same way. The core `Client.Logout` carries a `state` value so
-the logout round-trip can be correlated; for the same-URI case the standard
-`StartAuthFlow` path plus that `state` is sufficient.
+the logout round-trip can be correlated. Providers that omit state from the
+logout callback remain supported, but only when the delivered URL matches the
+configured post-logout redirect URI. Prefer a distinct logout callback URI when
+your provider omits state, because the compatibility path has weaker
+correlation than an exact state match.
 
 ## Checklist
 

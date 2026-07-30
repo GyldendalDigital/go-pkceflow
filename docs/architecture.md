@@ -17,7 +17,7 @@ go-pkceflow                         Core library (framework-agnostic)
   options.go                        Functional options (WithLogger, WithTokenPersistence, WithEventEmitter, WithHTTPClient)
   claims.go                         ID token claims decoding (Claims, DecodeIDToken)
   desktopflow/                      Localhost callback broker + system browser (implements AuthFlowHandler, LogoutFlowHandler)
-  mobileflow/                       Channel-based handler for deep link callbacks
+  mobileflow/                       Correlated handler for deep link callbacks
   filestore/                        Optional AES-256-GCM file persistence
   eventbus/                         DeferredEventBus, NoopEventBus utilities
   oidctest/                         FakeIDPServer, test doubles, assertion helpers

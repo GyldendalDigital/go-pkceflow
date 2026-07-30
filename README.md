@@ -158,7 +158,7 @@ New to OAuth/OIDC or setting up an IdP for the first time? Start here:
 |---------|---------|
 | `pkceflow` | Core Client API (New, Init, Login, Logout, AccessToken, AuthStatus) |
 | `desktopflow` | Localhost callback server + system browser opener |
-| `mobileflow` | Channel-based handler for mobile deep link callbacks |
+| `mobileflow` | URI- and state-correlated handler for mobile deep link callbacks |
 | `filestore` | AES-256-GCM encrypted token persistence |
 | `eventbus` | DeferredEventBus (startup ordering) and NoopEventBus |
 | `oidctest` | FakeIDPServer and test doubles (MemoryStore, RecordingEmitter, FakeFlowHandler) |
