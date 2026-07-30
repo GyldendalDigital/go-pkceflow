@@ -152,7 +152,7 @@ func (c *Client) Login(ctx context.Context) error {
 
 	c.stateCommitMu.Lock()
 	c.mu.Lock()
-	c.setStateLocked(newState)
+	c.setStateLocked(&newState)
 	c.mu.Unlock()
 	persistErr := c.store.Save(newState)
 	shouldDrain := c.enqueueEvent(EventLoggedIn, nil)

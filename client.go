@@ -187,17 +187,17 @@ func (c *Client) RestoreSession() bool {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.setStateLocked(state)
+	c.setStateLocked(&state)
 	return true
 }
 
 // setStateLocked replaces the in-memory token state and advances its semantic
 // revision when the state materially changes. c.mu must be held.
-func (c *Client) setStateLocked(state TokenState) {
-	if c.state == state {
+func (c *Client) setStateLocked(state *TokenState) {
+	if c.state == *state {
 		return
 	}
-	c.state = state
+	c.state = *state
 	c.stateRevision++
 }
 

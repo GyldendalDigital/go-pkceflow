@@ -26,7 +26,7 @@ func (c *Client) Logout(ctx context.Context) error {
 	idToken := c.state.IDToken
 	endSessionEndpoint := c.endSessionEndpoint
 	// Clear in-memory state immediately.
-	c.setStateLocked(TokenState{})
+	c.setStateLocked(&TokenState{})
 	c.mu.Unlock()
 	persistErr := c.store.Delete()
 	shouldDrain := c.enqueueEvent(EventLoggedOut, nil)

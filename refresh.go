@@ -34,12 +34,12 @@ func (c *Client) refresh(ctx context.Context, snapshot *TokenState) (TokenState,
 }
 
 func (c *Client) runRefreshAttempt(attempt *refreshAttempt) {
-	state, refreshErr, shouldDrain := c.performRefresh(
+	state, shouldDrain, refreshErr := c.performRefresh(
 		attempt.ctx,
 		&attempt.snapshot,
 		attempt.revision,
 	)
-	c.finishRefreshAttempt(attempt, state, refreshErr)
+	c.finishRefreshAttempt(attempt, &state, refreshErr)
 	if shouldDrain {
 		c.drainEvents()
 	}
@@ -134,11 +134,11 @@ func (c *Client) releaseRefreshParticipant(attempt *refreshAttempt) {
 
 func (c *Client) finishRefreshAttempt(
 	attempt *refreshAttempt,
-	state TokenState,
+	state *TokenState,
 	err error,
 ) {
 	c.refreshMu.Lock()
-	attempt.state = state
+	attempt.state = *state
 	attempt.err = err
 	if c.refreshAttempt == attempt {
 		c.refreshAttempt = nil
@@ -152,17 +152,17 @@ func (c *Client) performRefresh(
 	ctx context.Context,
 	snapshot *TokenState,
 	revision uint64,
-) (TokenState, error, bool) {
+) (TokenState, bool, error) {
 	c.mu.Lock()
 	if c.oauth2 == nil {
 		c.mu.Unlock()
-		return TokenState{}, ErrNotInitialized, false
+		return TokenState{}, false, ErrNotInitialized
 	}
 	oauthCfg := *c.oauth2
 	verifier := c.verifier
 	if verifier == nil {
 		c.mu.Unlock()
-		return TokenState{}, ErrNotInitialized, false
+		return TokenState{}, false, ErrNotInitialized
 	}
 	c.mu.Unlock()
 
@@ -181,7 +181,7 @@ func (c *Client) performRefresh(
 			revision,
 			fmt.Errorf("pkceflow: token refresh failed: %w", asAuthError(err)),
 		)
-		return state, refreshErr, false
+		return state, false, refreshErr
 	}
 
 	// Preserve new refresh token; fall back to old if absent
@@ -202,21 +202,21 @@ func (c *Client) performRefresh(
 				revision,
 				newSessionIntegrityError("refreshed ID token validation failed", err),
 			)
-			return state, refreshErr, false
+			return state, false, refreshErr
 		}
 		if verified.Subject == "" {
 			state, refreshErr := c.refreshFailure(
 				revision,
 				newSessionIntegrityError("refreshed ID token subject is empty", nil),
 			)
-			return state, refreshErr, false
+			return state, false, refreshErr
 		}
 		if snapshot.IDToken == "" {
 			state, refreshErr := c.refreshFailure(
 				revision,
 				newSessionIntegrityError("current ID token unavailable during refresh", nil),
 			)
-			return state, refreshErr, false
+			return state, false, refreshErr
 		}
 		claims, err := DecodeIDToken(snapshot.IDToken)
 		if err != nil {
@@ -224,21 +224,21 @@ func (c *Client) performRefresh(
 				revision,
 				newSessionIntegrityError("current ID token claims unavailable during refresh", err),
 			)
-			return state, refreshErr, false
+			return state, false, refreshErr
 		}
 		if claims.Subject == "" {
 			state, refreshErr := c.refreshFailure(
 				revision,
 				newSessionIntegrityError("current ID token subject is empty during refresh", nil),
 			)
-			return state, refreshErr, false
+			return state, false, refreshErr
 		}
 		if verified.Subject != claims.Subject {
 			state, refreshErr := c.refreshFailure(
 				revision,
 				newSessionIntegrityError("refreshed ID token subject changed", nil),
 			)
-			return state, refreshErr, false
+			return state, false, refreshErr
 		}
 	}
 
@@ -257,9 +257,9 @@ func (c *Client) performRefresh(
 		current := c.state
 		c.mu.Unlock()
 		c.stateCommitMu.Unlock()
-		return current, nil, false
+		return current, false, nil
 	}
-	c.setStateLocked(newState)
+	c.setStateLocked(&newState)
 	c.mu.Unlock()
 	persistErr := c.store.Save(newState)
 	shouldDrain := c.enqueueEvent(EventTokenRefreshed, nil)
@@ -268,7 +268,7 @@ func (c *Client) performRefresh(
 	if persistErr != nil {
 		c.logger.Warn("failed to persist refreshed tokens", "error", persistErr)
 	}
-	return newState, nil, shouldDrain
+	return newState, shouldDrain, nil
 }
 
 // refreshFailure suppresses stale failures from a refresh request that was

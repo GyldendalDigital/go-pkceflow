@@ -332,7 +332,7 @@ func (s *blockingSaveStore) unblock() {
 	})
 }
 
-func (s *blockingSaveStore) Save(state TokenState) error {
+func (s *blockingSaveStore) Save(state TokenState) error { //nolint:gocritic // hugeParam: interface requires value parameter
 	s.mu.Lock()
 	block := s.block
 	entered := s.entered
@@ -861,7 +861,7 @@ func TestEventEmitterCanReenterClientWithoutDeadlock(t *testing.T) {
 	snapshot.ExpiresAt = time.Now().Add(time.Second)
 	client.stateCommitMu.Lock()
 	client.mu.Lock()
-	client.setStateLocked(snapshot)
+	client.setStateLocked(&snapshot)
 	client.mu.Unlock()
 	if err := client.store.Save(snapshot); err != nil {
 		client.stateCommitMu.Unlock()

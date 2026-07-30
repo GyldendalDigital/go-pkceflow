@@ -120,10 +120,7 @@ func (c *Client) doRefresh(ctx context.Context) bool {
 	c.logger.Debug("refresh loop: refresh failed", "error", err)
 
 	if isSessionIntegrityError(err) {
-		if !c.emitEventIfRevision(revision, EventSessionExpired, nil) {
-			return true
-		}
-		return false
+		return !c.emitEventIfRevision(revision, EventSessionExpired, nil)
 	}
 
 	if IsPermanentError(err) {
@@ -135,10 +132,7 @@ func (c *Client) doRefresh(ctx context.Context) bool {
 			}
 		}
 		// Grace expired or disabled -- session is done
-		if !c.emitEventIfRevision(revision, EventSessionExpired, nil) {
-			return true
-		}
-		return false
+		return !c.emitEventIfRevision(revision, EventSessionExpired, nil)
 	}
 
 	// Temporary error -- keep retrying (interval will shorten via nextRefreshInterval)
