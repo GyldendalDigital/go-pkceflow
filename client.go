@@ -25,15 +25,27 @@ type Client struct {
 
 	httpClient *http.Client // nil = library default; routes all outbound HTTP
 
-	mu       sync.Mutex
-	state    TokenState
-	provider *oidc.Provider
-	verifier *oidc.IDTokenVerifier
-	oauth2   *oauth2.Config
+	// Refresh registration acquires refreshMu before mu. State transitions
+	// acquire stateCommitMu before mu and may then enqueue events under eventMu.
+	// Persistence runs under stateCommitMu but never mu; token endpoint work and
+	// EventEmitter callbacks hold none of these locks.
+	stateCommitMu sync.Mutex
+	refreshMu     sync.Mutex
+	eventMu       sync.Mutex
+
+	mu            sync.Mutex
+	state         TokenState
+	stateRevision uint64
+	provider      *oidc.Provider
+	verifier      *oidc.IDTokenVerifier
+	oauth2        *oauth2.Config
 
 	endSessionEndpoint string
+	refreshRun         *refreshLoopHandle
+	refreshAttempt     *refreshAttempt
 
-	refreshCancel context.CancelFunc // cancels the active refresh loop
+	pendingEvents    []clientEvent
+	eventDispatching bool
 }
 
 // New creates a new Client with the given configuration and flow handler.
@@ -160,6 +172,9 @@ func (c *Client) AuthStatus() AuthStatusResult {
 // Returns true if a usable session was found.
 // Does NOT require network (works before Init).
 func (c *Client) RestoreSession() bool {
+	c.stateCommitMu.Lock()
+	defer c.stateCommitMu.Unlock()
+
 	state, err := c.store.Load()
 	if err != nil {
 		c.logger.Warn("failed to load persisted session", "error", err)
@@ -172,8 +187,18 @@ func (c *Client) RestoreSession() bool {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.state = state
+	c.setStateLocked(&state)
 	return true
+}
+
+// setStateLocked replaces the in-memory token state and advances its semantic
+// revision when the state materially changes. c.mu must be held.
+func (c *Client) setStateLocked(state *TokenState) {
+	if c.state == *state {
+		return
+	}
+	c.state = *state
+	c.stateRevision++
 }
 
 // Init performs OIDC discovery and configures the OAuth2 client.
@@ -183,7 +208,7 @@ func (c *Client) RestoreSession() bool {
 func (c *Client) Init(ctx context.Context) error {
 	provider, err := oidc.NewProvider(c.httpContext(ctx), c.config.IssuerURL)
 	if err != nil {
-		c.emitter.Emit(EventInitFailed, nil)
+		c.emitEvent(EventInitFailed, nil)
 		return fmt.Errorf("pkceflow: OIDC discovery failed for %q: %w", c.config.IssuerURL, err)
 	}
 

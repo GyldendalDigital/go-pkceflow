@@ -7,27 +7,162 @@ import (
 	"golang.org/x/oauth2"
 )
 
+type refreshAttempt struct {
+	revision     uint64
+	snapshot     TokenState
+	ctx          context.Context
+	cancel       context.CancelFunc
+	participants int
+	done         chan struct{}
+	complete     chan struct{}
+	state        TokenState
+	err          error
+}
+
 // refresh performs a single token refresh using the refresh token.
-// It implements double-check locking: if the state has changed since the
-// snapshot was taken (another goroutine already refreshed), it returns
-// the current state without making a network call.
+// Concurrent callers for one state revision share the same in-flight result.
+// A later call may start a new attempt after a failed attempt has completed.
 func (c *Client) refresh(ctx context.Context, snapshot *TokenState) (TokenState, error) {
-	c.mu.Lock()
-	// Double-check: if state changed since snapshot, someone else refreshed
-	if c.state.AccessToken != snapshot.AccessToken {
+	attempt, leader, current, err := c.beginRefreshAttempt(ctx, snapshot)
+	if err != nil || attempt == nil {
+		return current, err
+	}
+	if leader {
+		go c.runRefreshAttempt(attempt)
+	}
+	return c.waitForRefreshAttempt(ctx, attempt)
+}
+
+func (c *Client) runRefreshAttempt(attempt *refreshAttempt) {
+	state, shouldDrain, refreshErr := c.performRefresh(
+		attempt.ctx,
+		&attempt.snapshot,
+		attempt.revision,
+	)
+	c.finishRefreshAttempt(attempt, &state, refreshErr)
+	if shouldDrain {
+		c.drainEvents()
+	}
+	close(attempt.complete)
+}
+
+func (c *Client) beginRefreshAttempt(
+	ctx context.Context,
+	snapshot *TokenState,
+) (*refreshAttempt, bool, TokenState, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, TokenState{}, err
+	}
+
+	for {
+		c.refreshMu.Lock()
+		c.mu.Lock()
+		if c.state != *snapshot {
+			current := c.state
+			c.mu.Unlock()
+			c.refreshMu.Unlock()
+			return nil, false, current, nil
+		}
+		revision := c.stateRevision
+		if c.oauth2 == nil || c.verifier == nil {
+			c.mu.Unlock()
+			c.refreshMu.Unlock()
+			return nil, false, TokenState{}, ErrNotInitialized
+		}
+		active := c.refreshAttempt
+		if active == nil {
+			attemptCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+			attempt := &refreshAttempt{
+				revision:     revision,
+				snapshot:     *snapshot,
+				ctx:          attemptCtx,
+				cancel:       cancel,
+				participants: 1,
+				done:         make(chan struct{}),
+				complete:     make(chan struct{}),
+			}
+			c.refreshAttempt = attempt
+			c.mu.Unlock()
+			c.refreshMu.Unlock()
+			return attempt, true, TokenState{}, nil
+		}
+		sameRevision := active.revision == revision
+		c.mu.Unlock()
+
+		if sameRevision && active.participants > 0 {
+			active.participants++
+			c.refreshMu.Unlock()
+			return active, false, TokenState{}, nil
+		}
+		c.refreshMu.Unlock()
+		select {
+		case <-active.done:
+		case <-ctx.Done():
+			return nil, false, TokenState{}, ctx.Err()
+		}
+	}
+}
+
+func (c *Client) waitForRefreshAttempt(
+	ctx context.Context,
+	attempt *refreshAttempt,
+) (TokenState, error) {
+	select {
+	case <-attempt.complete:
+		c.releaseRefreshParticipant(attempt)
+		if attempt.err != nil {
+			return attempt.state, attempt.err
+		}
+		c.mu.Lock()
 		current := c.state
 		c.mu.Unlock()
 		return current, nil
+	case <-ctx.Done():
+		c.releaseRefreshParticipant(attempt)
+		return TokenState{}, ctx.Err()
 	}
+}
+
+func (c *Client) releaseRefreshParticipant(attempt *refreshAttempt) {
+	c.refreshMu.Lock()
+	attempt.participants--
+	if attempt.participants == 0 && c.refreshAttempt == attempt {
+		attempt.cancel()
+	}
+	c.refreshMu.Unlock()
+}
+
+func (c *Client) finishRefreshAttempt(
+	attempt *refreshAttempt,
+	state *TokenState,
+	err error,
+) {
+	c.refreshMu.Lock()
+	attempt.state = *state
+	attempt.err = err
+	if c.refreshAttempt == attempt {
+		c.refreshAttempt = nil
+	}
+	attempt.cancel()
+	close(attempt.done)
+	c.refreshMu.Unlock()
+}
+
+func (c *Client) performRefresh(
+	ctx context.Context,
+	snapshot *TokenState,
+	revision uint64,
+) (TokenState, bool, error) {
+	c.mu.Lock()
 	if c.oauth2 == nil {
 		c.mu.Unlock()
-		return TokenState{}, ErrNotInitialized
+		return TokenState{}, false, ErrNotInitialized
 	}
 	oauthCfg := *c.oauth2
 	verifier := c.verifier
 	if verifier == nil {
 		c.mu.Unlock()
-		return TokenState{}, ErrNotInitialized
+		return TokenState{}, false, ErrNotInitialized
 	}
 	c.mu.Unlock()
 
@@ -42,7 +177,11 @@ func (c *Client) refresh(ctx context.Context, snapshot *TokenState) (TokenState,
 
 	newToken, err := src.Token()
 	if err != nil {
-		return TokenState{}, fmt.Errorf("pkceflow: token refresh failed: %w", asAuthError(err))
+		state, refreshErr := c.refreshFailure(
+			revision,
+			fmt.Errorf("pkceflow: token refresh failed: %w", asAuthError(err)),
+		)
+		return state, false, refreshErr
 	}
 
 	// Preserve new refresh token; fall back to old if absent
@@ -59,23 +198,47 @@ func (c *Client) refresh(ctx context.Context, snapshot *TokenState) (TokenState,
 	} else {
 		verified, err := verifier.Verify(ctx, idToken)
 		if err != nil {
-			return TokenState{}, newSessionIntegrityError("refreshed ID token validation failed", err)
+			state, refreshErr := c.refreshFailure(
+				revision,
+				newSessionIntegrityError("refreshed ID token validation failed", err),
+			)
+			return state, false, refreshErr
 		}
 		if verified.Subject == "" {
-			return TokenState{}, newSessionIntegrityError("refreshed ID token subject is empty", nil)
+			state, refreshErr := c.refreshFailure(
+				revision,
+				newSessionIntegrityError("refreshed ID token subject is empty", nil),
+			)
+			return state, false, refreshErr
 		}
 		if snapshot.IDToken == "" {
-			return TokenState{}, newSessionIntegrityError("current ID token unavailable during refresh", nil)
+			state, refreshErr := c.refreshFailure(
+				revision,
+				newSessionIntegrityError("current ID token unavailable during refresh", nil),
+			)
+			return state, false, refreshErr
 		}
 		claims, err := DecodeIDToken(snapshot.IDToken)
 		if err != nil {
-			return TokenState{}, newSessionIntegrityError("current ID token claims unavailable during refresh", err)
+			state, refreshErr := c.refreshFailure(
+				revision,
+				newSessionIntegrityError("current ID token claims unavailable during refresh", err),
+			)
+			return state, false, refreshErr
 		}
 		if claims.Subject == "" {
-			return TokenState{}, newSessionIntegrityError("current ID token subject is empty during refresh", nil)
+			state, refreshErr := c.refreshFailure(
+				revision,
+				newSessionIntegrityError("current ID token subject is empty during refresh", nil),
+			)
+			return state, false, refreshErr
 		}
 		if verified.Subject != claims.Subject {
-			return TokenState{}, newSessionIntegrityError("refreshed ID token subject changed", nil)
+			state, refreshErr := c.refreshFailure(
+				revision,
+				newSessionIntegrityError("refreshed ID token subject changed", nil),
+			)
+			return state, false, refreshErr
 		}
 	}
 
@@ -88,14 +251,33 @@ func (c *Client) refresh(ctx context.Context, snapshot *TokenState) (TokenState,
 		LastAuthAt:   now,
 	}
 
+	c.stateCommitMu.Lock()
 	c.mu.Lock()
-	c.state = newState
-	c.mu.Unlock()
-
-	if err := c.store.Save(newState); err != nil {
-		c.logger.Warn("failed to persist refreshed tokens", "error", err)
+	if c.stateRevision != revision {
+		current := c.state
+		c.mu.Unlock()
+		c.stateCommitMu.Unlock()
+		return current, false, nil
 	}
+	c.setStateLocked(&newState)
+	c.mu.Unlock()
+	persistErr := c.store.Save(newState)
+	shouldDrain := c.enqueueEvent(EventTokenRefreshed, nil)
+	c.stateCommitMu.Unlock()
 
-	c.emitter.Emit(EventTokenRefreshed, nil)
-	return newState, nil
+	if persistErr != nil {
+		c.logger.Warn("failed to persist refreshed tokens", "error", persistErr)
+	}
+	return newState, shouldDrain, nil
+}
+
+// refreshFailure suppresses stale failures from a refresh request that was
+// superseded while its network or verification work was in flight.
+func (c *Client) refreshFailure(revision uint64, err error) (TokenState, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.stateRevision != revision {
+		return c.state, nil
+	}
+	return TokenState{}, err
 }
