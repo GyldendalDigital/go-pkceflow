@@ -3,9 +3,11 @@
 package filestore
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,9 +33,20 @@ type Store struct {
 // New creates a Store that persists tokens to dir/tokens.enc.
 // The encryption key is derived from SHA-256(appID + ":" + machineID).
 // If the machine ID is unavailable, a persistent random key file is used instead.
+// appID must not be blank. When fallback key material is required, an existing
+// malformed or unsafe key causes New to fail rather than silently replacing it.
+// On Windows, callers passing an explicit dir must ensure its inherited ACL is
+// private to the application user; Go file modes do not configure Windows ACLs.
 func New(appID, dir string) (*Store, error) {
+	if err := validateAppID(appID); err != nil {
+		return nil, err
+	}
+
 	if err := os.MkdirAll(dir, dirPerm); err != nil {
 		return nil, fmt.Errorf("filestore: create directory %q: %w", dir, err)
+	}
+	if err := securePath(dir, dirPerm); err != nil {
+		return nil, fmt.Errorf("filestore: secure directory %q: %w", dir, err)
 	}
 
 	key, err := deriveKey(appID, dir)
@@ -48,7 +61,8 @@ func New(appID, dir string) (*Store, error) {
 	}, nil
 }
 
-// Save persists the token state encrypted to disk.
+// Save persists the token state encrypted to disk. It stages a complete private
+// replacement before publication instead of truncating the previous state.
 //
 //nolint:gocritic // hugeParam: interface requires value parameter
 func (s *Store) Save(state pkceflow.TokenState) error {
@@ -62,7 +76,7 @@ func (s *Store) Save(state pkceflow.TokenState) error {
 		return fmt.Errorf("filestore: encrypt: %w", err)
 	}
 
-	if err := os.WriteFile(s.path, ciphertext, filePerm); err != nil {
+	if err := writePrivateFileAtomic(s.path, ciphertext); err != nil {
 		return fmt.Errorf("filestore: write %q: %w", s.path, err)
 	}
 
@@ -105,13 +119,22 @@ func (s *Store) Delete() error {
 
 // deriveKey produces the 32-byte encryption key.
 func deriveKey(appID, dir string) ([32]byte, error) {
-	mid, err := machineID()
+	return deriveKeyWithSources(appID, dir, machineID, rand.Reader)
+}
+
+func deriveKeyWithSources(
+	appID string,
+	dir string,
+	machineIDSource func() (string, error),
+	random io.Reader,
+) ([32]byte, error) {
+	mid, err := machineIDSource()
 	if err == nil && mid != "" {
 		return sha256.Sum256([]byte(appID + ":" + mid)), nil
 	}
 
 	// Fallback: use a persisted random key file.
-	return fallbackKey(filepath.Join(dir, keyFileName))
+	return fallbackKeyWithReader(filepath.Join(dir, keyFileName), random)
 }
 
 // DefaultDir returns the recommended per-user directory for this application's
@@ -126,8 +149,8 @@ func deriveKey(appID, dir string) ([32]byte, error) {
 // os.UserConfigDir does not resolve to the application sandbox, so mobile
 // consumers should pass their platform-provided sandbox path to New instead.
 func DefaultDir(appID string) (string, error) {
-	if strings.TrimSpace(appID) == "" {
-		return "", fmt.Errorf("filestore: appID is required")
+	if err := validateAppID(appID); err != nil {
+		return "", err
 	}
 	base, err := os.UserConfigDir()
 	if err != nil {
@@ -145,4 +168,11 @@ func NewDefault(appID string) (*Store, error) {
 		return nil, err
 	}
 	return New(appID, dir)
+}
+
+func validateAppID(appID string) error {
+	if strings.TrimSpace(appID) == "" {
+		return fmt.Errorf("filestore: appID is required")
+	}
+	return nil
 }

@@ -17,15 +17,25 @@
 //
 // # Security
 //
-// Files are created with 0600 permissions, directories with 0700.
+// On Unix-like systems, files are created or replaced with verified 0600 mode
+// bits and store directories are created or tightened to verified 0700 mode
+// bits. Go file modes do not configure Windows ACLs: NewDefault uses the
+// per-user config tree, while callers of New must provide a directory whose
+// inherited ACL is private to the application user. A malformed, non-regular,
+// or symlinked fallback key is rejected rather than silently replaced.
+// Fallback-key publication requires same-directory hard-link support, and token
+// replacement requires same-directory rename support.
+// Staged file contents and Unix directory namespace updates are synced before
+// success is returned. Windows power-loss durability remains filesystem-defined.
 // The encryption key is derived from SHA-256(appID + ":" + machineID).
 // If the machine ID changes or the key file is lost, existing tokens become
 // unreadable and the user must log in again (zero TokenState returned, not error).
 //
-// AES-256-GCM at rest, together with per-user file permissions on desktop and
-// the application sandbox on mobile, is sufficient for storing typical OIDC
-// tokens. This implementation deliberately favours a dependency-free, CGo-free,
-// cross-platform implementation over an OS credential manager.
+// AES-256-GCM at rest, together with POSIX mode bits or a private Windows ACL
+// on desktop and the application sandbox on mobile, is sufficient for storing
+// typical OIDC tokens. This implementation deliberately favours a
+// dependency-free, CGo-free, cross-platform implementation over an OS
+// credential manager.
 //
 // The encryption primarily protects tokens against disk or backup exposure and
 // access by other user accounts. It is not a strong defence against an attacker
