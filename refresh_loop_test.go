@@ -190,14 +190,14 @@ func newRefreshLoopTestClient(
 func startRefreshLoopTest(
 	client *Client,
 	script *scriptedRefreshLoop,
-) (context.CancelFunc, <-chan struct{}) {
+) (cancel context.CancelFunc, done <-chan struct{}) {
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
+	doneCh := make(chan struct{})
 	go func() {
-		defer close(done)
+		defer close(doneCh)
 		client.runRefreshLoop(ctx, script.attempt)
 	}()
-	return cancel, done
+	return cancel, doneCh
 }
 
 func stopRefreshLoopTest(
