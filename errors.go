@@ -31,7 +31,8 @@ var (
 	// session (e.g., Claims) when no ID token is available.
 	ErrNotAuthenticated = errors.New("pkceflow: not authenticated (no ID token available)")
 
-	errSessionIntegrity = errors.New("pkceflow: session integrity check failed")
+	errSessionIntegrity          = errors.New("pkceflow: session integrity check failed")
+	errRefreshPermanentlyBlocked = errors.New("pkceflow: token generation is permanently blocked")
 )
 
 // AuthError represents an OAuth2/OIDC error returned by the identity provider.
@@ -61,7 +62,8 @@ var permanentErrorCodes = map[string]bool{
 // refresh token is invalid (revoked, expired, or the client is no longer
 // authorized), or the refreshed session no longer matches the trusted session.
 func IsPermanentError(err error) bool {
-	if errors.Is(err, errSessionIntegrity) {
+	if errors.Is(err, errSessionIntegrity) ||
+		errors.Is(err, errRefreshPermanentlyBlocked) {
 		return true
 	}
 	var authErr *AuthError

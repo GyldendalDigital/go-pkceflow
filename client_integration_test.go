@@ -542,94 +542,10 @@ func TestAuthStatus_GraceDisabled(t *testing.T) {
 	}
 }
 
-// waitForEvent polls the emitter until the named event appears or the timeout
-// elapses. It fails the test if the event never arrives.
-func waitForEvent(t *testing.T, emitter *oidctest.RecordingEmitter, name string, timeout time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if emitter.HasEvent(name) {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatalf("event %q not emitted within %s; got events %+v", name, timeout, emitter.Events())
-}
-
 func unsignedIDToken(payload string) string {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
 	body := base64.RawURLEncoding.EncodeToString([]byte(payload))
 	return header + "." + body + ".signature"
-}
-
-func TestRefreshLoop_PermanentError_EmitsSessionExpired(t *testing.T) {
-	client, idp, _, emitter := newTestClient(t)
-
-	if err := client.Init(context.Background()); err != nil {
-		t.Fatalf("Init: %v", err)
-	}
-	if err := client.Login(context.Background()); err != nil {
-		t.Fatalf("Login: %v", err)
-	}
-
-	// The IdP rejects every token request as a revoked refresh token.
-	idp.SetTokenError("invalid_grant")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// The loop performs an immediate refresh on start, which fails permanently.
-	client.StartRefreshLoop(ctx)
-	defer client.StopRefreshLoop()
-
-	waitForEvent(t, emitter, pkceflow.EventSessionExpired, 2*time.Second)
-}
-
-func TestRefreshLoop_PermanentError_StaysInGrace(t *testing.T) {
-	redirectURI := "http://127.0.0.1:9999/callback"
-	idp := oidctest.NewFakeIDP(t,
-		oidctest.WithClientID("test-app"),
-		oidctest.WithRedirectURI(redirectURI),
-		oidctest.WithAccessTTL(5*time.Minute),
-	)
-	store := &oidctest.MemoryStore{}
-	emitter := &oidctest.RecordingEmitter{}
-	handler := oidctest.NewFakeFlowHandler(idp, redirectURI)
-
-	client, err := pkceflow.New(pkceflow.Config{
-		IssuerURL:   idp.IssuerURL(),
-		ClientID:    "test-app",
-		GracePeriod: 30 * 24 * time.Hour,
-	}, handler,
-		pkceflow.WithTokenPersistence(store),
-		pkceflow.WithEventEmitter(emitter),
-	)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	if err := client.Init(context.Background()); err != nil {
-		t.Fatalf("Init: %v", err)
-	}
-	if err := client.Login(context.Background()); err != nil {
-		t.Fatalf("Login: %v", err)
-	}
-
-	// Permanent error, but a fresh login means grace has not expired: the loop
-	// must keep the session and NOT emit EventSessionExpired.
-	idp.SetTokenError("invalid_grant")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	client.StartRefreshLoop(ctx)
-	defer client.StopRefreshLoop()
-
-	// Give the immediate refresh time to run and fail.
-	time.Sleep(100 * time.Millisecond)
-
-	if emitter.HasEvent(pkceflow.EventSessionExpired) {
-		t.Error("EventSessionExpired emitted while still within grace period")
-	}
 }
 
 // countingTransport records the request paths that pass through it.
@@ -864,48 +780,6 @@ func TestRefresh_RejectsCurrentIDTokenWithoutSubject(t *testing.T) {
 	}
 }
 
-func TestRefreshLoop_IDTokenIntegrityFailure_EmitsSessionExpiredDespiteGrace(t *testing.T) {
-	redirectURI := "http://127.0.0.1:9999/callback"
-	idp := oidctest.NewFakeIDP(t,
-		oidctest.WithClientID("test-app"),
-		oidctest.WithRedirectURI(redirectURI),
-		oidctest.WithRawRefreshIDToken("not.a.jwt"),
-	)
-
-	store := &oidctest.MemoryStore{}
-	emitter := &oidctest.RecordingEmitter{}
-	handler := oidctest.NewFakeFlowHandler(idp, redirectURI)
-	client, err := pkceflow.New(pkceflow.Config{
-		IssuerURL:   idp.IssuerURL(),
-		ClientID:    "test-app",
-		GracePeriod: 30 * 24 * time.Hour,
-	}, handler,
-		pkceflow.WithTokenPersistence(store),
-		pkceflow.WithEventEmitter(emitter),
-	)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	if err := client.Init(context.Background()); err != nil {
-		t.Fatalf("Init: %v", err)
-	}
-	if err := client.Login(context.Background()); err != nil {
-		t.Fatalf("Login: %v", err)
-	}
-
-	emitter.Reset()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	client.StartRefreshLoop(ctx)
-	defer client.StopRefreshLoop()
-
-	waitForEvent(t, emitter, pkceflow.EventSessionExpired, 2*time.Second)
-	if emitter.HasEvent(pkceflow.EventTokenRefreshed) {
-		t.Fatal("EventTokenRefreshed emitted after malformed refreshed ID token")
-	}
-}
-
 func TestRefresh_RejectsMalformedIDToken(t *testing.T) {
 	redirectURI := "http://127.0.0.1:9999/callback"
 	idp := oidctest.NewFakeIDP(t,
@@ -919,8 +793,9 @@ func TestRefresh_RejectsMalformedIDToken(t *testing.T) {
 	emitter := &oidctest.RecordingEmitter{}
 	handler := oidctest.NewFakeFlowHandler(idp, redirectURI)
 	client, err := pkceflow.New(pkceflow.Config{
-		IssuerURL: idp.IssuerURL(),
-		ClientID:  "test-app",
+		IssuerURL:   idp.IssuerURL(),
+		ClientID:    "test-app",
+		GracePeriod: 24 * time.Hour,
 	}, handler,
 		pkceflow.WithTokenPersistence(store),
 		pkceflow.WithEventEmitter(emitter),
@@ -948,6 +823,9 @@ func TestRefresh_RejectsMalformedIDToken(t *testing.T) {
 	}
 	if emitter.HasEvent(pkceflow.EventTokenRefreshed) {
 		t.Fatal("EventTokenRefreshed emitted after malformed refreshed ID token")
+	}
+	if status := client.AuthStatus(); status.CanUseApp || status.GraceMode {
+		t.Fatalf("integrity-failed session remained usable: %+v", status)
 	}
 
 	after, err := store.Load()

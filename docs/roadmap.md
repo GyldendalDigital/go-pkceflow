@@ -53,7 +53,7 @@ Current status: **Pre-1.0 beta hardening**
 > Background token refresh and event utilities.
 
 - [x] Event bus utilities (DeferredEventBus, NoopEventBus)
-- [x] Background refresh loop with adaptive timing
+- [x] Background refresh loop with DHCP-style lifetime scheduling
 
 ### M8: Integration ✓
 > First working end-to-end desktop login, hardened for real-world IdPs.
@@ -99,7 +99,7 @@ Current status: **Pre-1.0 beta hardening**
 
 - [ ] Complete coverage and edge-path hardening
   ([#43](https://github.com/GyldendalDigital/go-pkceflow/issues/43)).
-- [ ] Correct the refresh scheduler so retries follow explicit 50%, 25%, 12.5%
+- [x] Correct the refresh scheduler so retries follow explicit 50%, 25%, 12.5%
   lifetime stages and stop at access-token expiry
   ([#55](https://github.com/GyldendalDigital/go-pkceflow/issues/55)).
 - [ ] Harden mobile callback filtering and active-flow handling.

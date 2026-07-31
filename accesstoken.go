@@ -13,14 +13,19 @@ import "context"
 // and surfaces as an empty string. A successful refresh emits
 // EventTokenRefreshed, whether triggered here or by the background loop. Only
 // the background refresh loop emits EventSessionExpired on a permanent failure.
+// A permanent failure discovered here still parks that token generation so a
+// later Start or Resume does not retry a known-invalid refresh token.
 // Consumers that need to distinguish "expired" from "never authenticated"
 // should consult AuthStatus.
 func (c *Client) AccessToken(ctx context.Context) string {
 	c.mu.Lock()
 	state := c.state
+	revision := c.stateRevision
+	integrityBlocked := c.refreshIntegrityBlockedLocked()
+	permanentlyBlocked := c.refreshPermanentlyBlockedLocked()
 	c.mu.Unlock()
 
-	if state.IsZero() {
+	if state.IsZero() || integrityBlocked {
 		return ""
 	}
 
@@ -32,19 +37,23 @@ func (c *Client) AccessToken(ctx context.Context) string {
 	}
 
 	// Token expired; try refresh if we have a refresh token and are initialized
-	if state.RefreshToken != "" {
+	if state.RefreshToken != "" && !permanentlyBlocked {
 		c.mu.Lock()
 		isInit := c.initialized()
 		c.mu.Unlock()
 
 		if isInit {
-			newState, err := c.refresh(ctx, &state)
+			newState, _, err := c.refreshForRevision(ctx, &state, revision)
 			if err == nil {
 				return newState.AccessToken
 			}
 			c.logger.Debug("token refresh failed in AccessToken", "error", err)
 			if isSessionIntegrityError(err) {
+				c.blockRefreshIntegrity(revision, c.now())
 				return ""
+			}
+			if IsPermanentError(err) {
+				c.blockRefreshPermanent(revision, &state, c.now())
 			}
 		}
 	}

@@ -112,23 +112,32 @@ token exists. If a normal refresh error occurs, it may return the previous
 token while grace is active. A session-integrity failure always fails closed,
 even during grace.
 
-The background loop currently:
+The background refresh supervisor uses the token's original lifetime
+(`ExpiresAt - LastAuthAt`) as a DHCP-style schedule:
 
-1. attempts a refresh immediately when started, which refreshes restored
-   sessions eagerly;
-2. after each attempt, sleeps for
-   `max(time_until_access_token_expiry / 2, 10 seconds)`;
-3. resets the schedule from the new expiry after success;
-4. keeps retrying temporary failures and permanent OAuth errors while grace is
-   active;
-5. emits `oidcauth:session-expired` and stops when a permanent OAuth error is
-   outside grace, or immediately on a session-integrity failure.
+1. it makes no eager request merely because the loop started;
+2. the first attempt occurs when 50% of the original lifetime remains;
+3. temporary failures retry when 25%, 12.5%, and later halving fractions
+   remain, with at least 10 seconds between failed attempts;
+4. a successful refresh starts a new schedule from the returned token state;
+5. no background request starts at or after the actual access-token expiry.
 
-Issue [#55](https://github.com/GyldendalDigital/go-pkceflow/issues/55) tracks
-the remaining scheduler correction: make the 50%, 25%, 12.5% retry stages
-explicit and stop network refresh attempts once the access token has expired.
-Expiry must not force a login; `AuthStatus` and the configured grace period
-continue to decide whether the app is usable.
+If the next legal retry would be at or after expiry, that token generation is
+parked. The supervisor stays alive and waits for newer Login, RestoreSession,
+or successful on-demand refresh state. Parking does not clear tokens, launch
+Login, or emit `oidcauth:session-expired`; `AuthStatus` and the configured grace
+period continue to decide whether the app is usable.
+
+A permanent OAuth error also parks that generation immediately, because
+retrying a revoked or invalid refresh token cannot help. The supervisor emits
+`oidcauth:session-expired` once when grace is disabled or exhausted, without
+making more network attempts while grace remains. A session-integrity failure
+parks and emits immediately despite grace, and the affected generation fails
+closed in `AccessToken` and `AuthStatus`.
+
+Stopping and restarting the loop does not reset a generation's retry stage or
+terminal disposition. Token state with missing or inconsistent lifetime
+timestamps has no safe background schedule and remains idle.
 
 Every successful refresh emits `oidcauth:token-refreshed`, including a refresh
 triggered synchronously by `AccessToken`.
