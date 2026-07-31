@@ -44,13 +44,14 @@ func (c *observedDoneContext) Done() <-chan struct{} {
 }
 
 type refreshEndpointGate struct {
-	entered     chan struct{}
-	release     chan struct{}
-	releaseOnce sync.Once
-	requests    atomic.Int32
-	oauthError  string
-	status      int
-	idToken     string
+	entered          chan struct{}
+	release          chan struct{}
+	releaseOnce      sync.Once
+	requests         atomic.Int32
+	oauthError       string
+	status           int
+	idToken          string
+	omitRefreshToken bool
 }
 
 func newRefreshEndpointGate() *refreshEndpointGate {
@@ -102,6 +103,14 @@ func (g *refreshEndpointGate) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			request,
 			request,
 			g.idToken,
+		)
+		return
+	}
+	if g.omitRefreshToken {
+		_, _ = fmt.Fprintf(
+			w,
+			`{"access_token":"access-%d","token_type":"Bearer","expires_in":3600}`,
+			request,
 		)
 		return
 	}
@@ -488,6 +497,52 @@ func waitForTestWaitGroup(t *testing.T, group *sync.WaitGroup, message string) {
 		close(done)
 	}()
 	waitForTestSignal(t, done, message)
+}
+
+func TestRefreshPersistsRefreshTokenResponseSemantics(t *testing.T) {
+	tests := []struct {
+		name             string
+		omitRefreshToken bool
+		wantRefreshToken string
+	}{
+		{name: "rotated", wantRefreshToken: "refresh-1"},
+		{name: "omitted", omitRefreshToken: true, wantRefreshToken: "refresh-old"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &memoryStore{}
+			client, snapshot, endpoint := newRefreshConcurrencyClient(t, store, nil)
+			endpoint.omitRefreshToken = tt.omitRefreshToken
+			endpoint.unblock()
+
+			got, err := client.refresh(context.Background(), &snapshot)
+			if err != nil {
+				t.Fatalf("refresh: %v", err)
+			}
+			if got.RefreshToken != tt.wantRefreshToken {
+				t.Fatalf("returned refresh token = %q, want %q", got.RefreshToken, tt.wantRefreshToken)
+			}
+
+			client.mu.Lock()
+			current := client.state
+			client.mu.Unlock()
+			if current != got {
+				t.Fatalf("in-memory state = %+v, want returned state %+v", current, got)
+			}
+
+			persisted, err := store.Load()
+			if err != nil {
+				t.Fatalf("load persisted state: %v", err)
+			}
+			if persisted != got {
+				t.Fatalf("persisted state = %+v, want returned state %+v", persisted, got)
+			}
+			if requests := endpoint.requests.Load(); requests != 1 {
+				t.Fatalf("token endpoint requests = %d, want 1", requests)
+			}
+		})
+	}
 }
 
 func TestRefreshForRevisionDoesNotStartAgainstNewerState(t *testing.T) {
