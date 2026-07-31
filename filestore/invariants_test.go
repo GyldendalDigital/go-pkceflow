@@ -391,7 +391,7 @@ func TestLoadCorruptionThenSaveRecovers(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load recovery state: %v", err)
 			}
-			assertTokenState(t, got, want)
+			assertTokenState(t, &got, &want)
 		})
 	}
 }
@@ -618,7 +618,7 @@ func assertOnlyDirectoryEntry(t *testing.T, dir, want string) {
 	}
 }
 
-func assertTokenState(t *testing.T, got, want pkceflow.TokenState) {
+func assertTokenState(t *testing.T, got, want *pkceflow.TokenState) {
 	t.Helper()
 	if got.AccessToken != want.AccessToken ||
 		got.RefreshToken != want.RefreshToken ||

@@ -78,7 +78,7 @@ func readFallbackKey(path string) ([32]byte, error) {
 	if err != nil {
 		return [32]byte{}, fmt.Errorf("open fallback key %q: %w", path, err)
 	}
-	defer file.Close() //nolint:errcheck
+	defer file.Close() //nolint:errcheck // read-only descriptor cleanup has no actionable error
 
 	after, err := file.Stat()
 	if err != nil {
