@@ -172,13 +172,18 @@ additional TokenPersistence implementation without changing the core API.
   introduce a client secret
 
 Token storage security model: the included filestore encrypts tokens with
-AES-256-GCM and relies on per-user file permissions (desktop) or the application
-sandbox (mobile). This is sufficient for typical OIDC tokens and keeps the
-default dependency-free and CGo-free. Consumers needing stricter handling (an OS
-keyring or Keychain, a hardware-backed keystore, or a secure enclave) implement
-the `TokenPersistence` interface and inject it via `WithTokenPersistence`; no
-other change is required. An OS-native store may also be added to the library as
-an additional backend later without breaking the API.
+AES-256-GCM and relies on verified POSIX mode bits, a caller-private inherited
+Windows ACL, or the application sandbox on mobile. `NewDefault` uses the normal
+per-user configuration tree; callers passing an explicit Windows directory to
+`New` are responsible for its ACL because Go file modes do not configure DACLs.
+Explicit store directories must support same-directory hard links for fallback
+key publication and same-directory rename replacement for token saves.
+This is sufficient for typical OIDC tokens and keeps the default dependency-free
+and CGo-free. Consumers needing stricter handling (an OS keyring or Keychain, a
+hardware-backed keystore, or a secure enclave) implement the
+`TokenPersistence` interface and inject it via `WithTokenPersistence`; no other
+change is required. An OS-native store may also be added to the library as an
+additional backend later without breaking the API.
 
 ## Provider Status
 
