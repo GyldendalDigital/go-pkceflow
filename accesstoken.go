@@ -13,6 +13,7 @@ import "context"
 // and surfaces as an empty string. A successful refresh emits
 // EventTokenRefreshed, whether triggered here or by the background loop. Only
 // the background refresh loop emits EventSessionExpired on a permanent failure.
+// Grace is evaluated after any attempted refresh has completed.
 // A permanent failure discovered here still parks that token generation so a
 // later Start or Resume does not retry a known-invalid refresh token.
 // Consumers that need to distinguish "expired" from "never authenticated"
@@ -59,9 +60,10 @@ func (c *Client) AccessToken(ctx context.Context) string {
 	}
 
 	// Refresh failed or not possible; check grace period
+	graceNow := c.now()
 	if c.config.GracePeriod > 0 && !state.LastAuthAt.IsZero() {
 		graceEnd := state.LastAuthAt.Add(c.config.GracePeriod)
-		if now.Before(graceEnd) {
+		if graceNow.Before(graceEnd) {
 			return state.AccessToken
 		}
 	}
