@@ -2,9 +2,14 @@ package pkceflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"golang.org/x/oauth2"
+)
+
+var errScheduledRefreshExpired = errors.New(
+	"pkceflow: scheduled refresh reached access-token expiry",
 )
 
 type refreshAttempt struct {
@@ -23,14 +28,49 @@ type refreshAttempt struct {
 // Concurrent callers for one state revision share the same in-flight result.
 // A later call may start a new attempt after a failed attempt has completed.
 func (c *Client) refresh(ctx context.Context, snapshot *TokenState) (TokenState, error) {
-	attempt, leader, current, err := c.beginRefreshAttempt(ctx, snapshot)
+	state, _, err := c.refreshAtRevision(ctx, snapshot, nil, 0)
+	return state, err
+}
+
+// refreshForRevision prevents a timer that belonged to an older scheduler
+// generation from starting a grant against newer state.
+func (c *Client) refreshForRevision(
+	ctx context.Context,
+	snapshot *TokenState,
+	revision uint64,
+) (TokenState, bool, error) {
+	return c.refreshAtRevision(ctx, snapshot, &revision, 0)
+}
+
+func (c *Client) refreshForSchedule(
+	ctx context.Context,
+	snapshot *TokenState,
+	revision uint64,
+	claimID uint64,
+) (TokenState, bool, error) {
+	return c.refreshAtRevision(ctx, snapshot, &revision, claimID)
+}
+
+func (c *Client) refreshAtRevision(
+	ctx context.Context,
+	snapshot *TokenState,
+	expectedRevision *uint64,
+	expectedClaimID uint64,
+) (TokenState, bool, error) {
+	attempt, leader, current, err := c.beginRefreshAttempt(
+		ctx,
+		snapshot,
+		expectedRevision,
+		expectedClaimID,
+	)
 	if err != nil || attempt == nil {
-		return current, err
+		return current, false, err
 	}
 	if leader {
 		go c.runRefreshAttempt(attempt)
 	}
-	return c.waitForRefreshAttempt(ctx, attempt)
+	state, err := c.waitForRefreshAttempt(ctx, attempt)
+	return state, true, err
 }
 
 func (c *Client) runRefreshAttempt(attempt *refreshAttempt) {
@@ -49,6 +89,8 @@ func (c *Client) runRefreshAttempt(attempt *refreshAttempt) {
 func (c *Client) beginRefreshAttempt(
 	ctx context.Context,
 	snapshot *TokenState,
+	expectedRevision *uint64,
+	expectedClaimID uint64,
 ) (*refreshAttempt, bool, TokenState, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, TokenState{}, err
@@ -57,6 +99,12 @@ func (c *Client) beginRefreshAttempt(
 	for {
 		c.refreshMu.Lock()
 		c.mu.Lock()
+		if expectedRevision != nil && c.stateRevision != *expectedRevision {
+			current := c.state
+			c.mu.Unlock()
+			c.refreshMu.Unlock()
+			return nil, false, current, nil
+		}
 		if c.state != *snapshot {
 			current := c.state
 			c.mu.Unlock()
@@ -64,6 +112,39 @@ func (c *Client) beginRefreshAttempt(
 			return nil, false, current, nil
 		}
 		revision := c.stateRevision
+		if c.refreshIntegrityBlockedLocked() {
+			current := c.state
+			c.mu.Unlock()
+			c.refreshMu.Unlock()
+			return nil, false, current, newSessionIntegrityError(
+				"token generation is blocked after an integrity failure",
+				nil,
+			)
+		}
+		if c.refreshPermanentlyBlockedLocked() {
+			current := c.state
+			c.mu.Unlock()
+			c.refreshMu.Unlock()
+			return nil, false, current, errRefreshPermanentlyBlocked
+		}
+		if expectedClaimID != 0 {
+			schedule := c.refreshSchedule
+			if !schedule.valid ||
+				schedule.revision != revision ||
+				schedule.claimID != expectedClaimID ||
+				schedule.disposition != refreshLoopActive {
+				current := c.state
+				c.mu.Unlock()
+				c.refreshMu.Unlock()
+				return nil, false, current, nil
+			}
+			if !c.now().Before(snapshot.ExpiresAt) {
+				current := c.state
+				c.mu.Unlock()
+				c.refreshMu.Unlock()
+				return nil, false, current, errScheduledRefreshExpired
+			}
+		}
 		if c.oauth2 == nil || c.verifier == nil {
 			c.mu.Unlock()
 			c.refreshMu.Unlock()
@@ -138,6 +219,20 @@ func (c *Client) finishRefreshAttempt(
 	err error,
 ) {
 	c.refreshMu.Lock()
+	if err != nil {
+		c.mu.Lock()
+		switch {
+		case isSessionIntegrityError(err):
+			c.blockRefreshIntegrityLocked(attempt.revision, c.now())
+		case IsPermanentError(err):
+			c.blockRefreshPermanentLocked(
+				attempt.revision,
+				&attempt.snapshot,
+				c.now(),
+			)
+		}
+		c.mu.Unlock()
+	}
 	attempt.state = *state
 	attempt.err = err
 	if c.refreshAttempt == attempt {
@@ -259,7 +354,7 @@ func (c *Client) performRefresh(
 		c.stateCommitMu.Unlock()
 		return current, false, nil
 	}
-	c.setStateLocked(&newState)
+	c.advanceStateLocked(&newState)
 	c.mu.Unlock()
 	persistErr := c.store.Save(newState)
 	shouldDrain := c.enqueueEvent(EventTokenRefreshed, nil)

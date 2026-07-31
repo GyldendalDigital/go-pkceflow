@@ -50,6 +50,7 @@ type refreshEndpointGate struct {
 	requests    atomic.Int32
 	oauthError  string
 	status      int
+	idToken     string
 }
 
 func newRefreshEndpointGate() *refreshEndpointGate {
@@ -92,6 +93,16 @@ func (g *refreshEndpointGate) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	if g.status != 0 {
 		w.WriteHeader(g.status)
 		_, _ = io.WriteString(w, `{"message":"token endpoint unavailable"}`)
+		return
+	}
+	if g.idToken != "" {
+		_, _ = fmt.Fprintf(
+			w,
+			`{"access_token":"access-%d","refresh_token":"refresh-%d","token_type":"Bearer","expires_in":3600,"id_token":%q}`,
+			request,
+			request,
+			g.idToken,
+		)
 		return
 	}
 	_, _ = fmt.Fprintf(
@@ -479,6 +490,104 @@ func waitForTestWaitGroup(t *testing.T, group *sync.WaitGroup, message string) {
 	waitForTestSignal(t, done, message)
 }
 
+func TestRefreshForRevisionDoesNotStartAgainstNewerState(t *testing.T) {
+	client, snapshot, endpoint := newRefreshConcurrencyClient(t, nil, nil)
+
+	client.mu.Lock()
+	expectedRevision := client.stateRevision
+	newer := snapshot
+	newer.AccessToken = "access-new"
+	client.advanceStateLocked(&newer)
+	client.mu.Unlock()
+
+	got, started, err := client.refreshForRevision(
+		context.Background(),
+		&snapshot,
+		expectedRevision,
+	)
+	if err != nil {
+		t.Fatalf("refreshForRevision: %v", err)
+	}
+	if started {
+		t.Fatal("stale scheduler revision started or joined a refresh grant")
+	}
+	if got != newer {
+		t.Fatalf("refreshForRevision returned %+v, want newer state %+v", got, newer)
+	}
+	if requests := endpoint.requests.Load(); requests != 0 {
+		t.Fatalf("token endpoint requests = %d, want 0", requests)
+	}
+}
+
+func TestRefreshTerminalDispositionPrecedesAttemptAdmission(t *testing.T) {
+	tests := []struct {
+		name          string
+		err           error
+		wantBlock     refreshLoopDisposition
+		wantIntegrity bool
+	}{
+		{
+			name:      "permanent",
+			err:       &AuthError{Code: "invalid_grant"},
+			wantBlock: refreshLoopBlockedPermanent,
+		},
+		{
+			name:          "integrity",
+			err:           newSessionIntegrityError("malformed refreshed ID token", nil),
+			wantBlock:     refreshLoopBlockedIntegrity,
+			wantIntegrity: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, snapshot, endpoint := newRefreshConcurrencyClient(t, nil, nil)
+			attempt, leader, _, err := client.beginRefreshAttempt(
+				context.Background(),
+				&snapshot,
+				nil,
+				0,
+			)
+			if err != nil {
+				t.Fatalf("begin first refresh: %v", err)
+			}
+			if !leader || attempt == nil {
+				t.Fatal("first refresh did not create the active attempt")
+			}
+
+			client.finishRefreshAttempt(attempt, &TokenState{}, tt.err)
+			if client.refreshSchedule.disposition != tt.wantBlock {
+				t.Fatalf(
+					"terminal disposition = %d, want %d",
+					client.refreshSchedule.disposition,
+					tt.wantBlock,
+				)
+			}
+
+			next, _, _, nextErr := client.beginRefreshAttempt(
+				context.Background(),
+				&snapshot,
+				nil,
+				0,
+			)
+			if next != nil {
+				t.Fatal("second grant was admitted after terminal completion")
+			}
+			if tt.wantIntegrity {
+				if !isSessionIntegrityError(nextErr) {
+					t.Fatalf("second admission error = %v, want integrity", nextErr)
+				}
+			} else if !IsPermanentError(nextErr) {
+				t.Fatalf("second admission error = %v, want permanent", nextErr)
+			}
+			if requests := endpoint.requests.Load(); requests != 0 {
+				t.Fatalf("token endpoint requests = %d, want 0", requests)
+			}
+			close(attempt.complete)
+		})
+	}
+}
+
 func TestRefreshSharesSuccessfulAttemptPerRevision(t *testing.T) {
 	client, snapshot, endpoint := newRefreshConcurrencyClient(t, nil, nil)
 
@@ -577,8 +686,16 @@ func TestRefreshSharesFailedAttemptPerRevision(t *testing.T) {
 			if laterErr == nil {
 				t.Fatal("later refresh error = nil, want retry failure")
 			}
-			if got := endpoint.requests.Load(); got != 2 {
-				t.Fatalf("requests after later retry = %d, want 2", got)
+			wantRequests := int32(2)
+			if tt.wantPermanent {
+				wantRequests = 1
+			}
+			if got := endpoint.requests.Load(); got != wantRequests {
+				t.Fatalf(
+					"requests after later call = %d, want %d",
+					got,
+					wantRequests,
+				)
 			}
 		})
 	}

@@ -109,6 +109,13 @@ After a successful login the app holds up to three tokens:
   subject id). This one is meant to be read. `client.Claims()` decodes it for
   you after the library has verified it. See [`claims.go`](../claims.go).
 
+The refresh loop waits until half of the access token's original lifetime
+remains before its first request. If the provider is temporarily unavailable,
+it retries at progressively later lifetime thresholds (one quarter remaining,
+then one eighth, and so on) without starting a request after the token expires.
+Expiry itself never opens the browser or forces sign-in; the app's configured
+grace period still determines whether offline use may continue.
+
 go-pkceflow requests `openid profile email offline_access` by default. The
 first three request sign-in and profile claims. `offline_access` asks for a
 refresh token, but providers apply their own policy: Keycloak also needs the

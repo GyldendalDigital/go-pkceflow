@@ -18,7 +18,7 @@ validation before a stable release.
 - RP-Initiated Logout with separate, correlated post-logout redirect URIs
 - ID token claims decoding (`client.Claims()`)
 - Encrypted token persistence (AES-256-GCM filestore, pluggable interface)
-- Background token refresh with adaptive timing
+- Background token refresh with DHCP-style lifetime scheduling
 - Offline grace period for intermittent connectivity
 - Event-driven auth state notifications
 - Custom HTTP client injection (`WithHTTPClient`) for proxies, custom CA/mTLS, and transport tuning

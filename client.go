@@ -22,6 +22,7 @@ type Client struct {
 	store   TokenPersistence
 	emitter EventEmitter
 	logger  *slog.Logger
+	clock   refreshClock
 
 	httpClient *http.Client // nil = library default; routes all outbound HTTP
 
@@ -43,6 +44,9 @@ type Client struct {
 	endSessionEndpoint string
 	refreshRun         *refreshLoopHandle
 	refreshAttempt     *refreshAttempt
+	refreshWake        chan struct{}
+	refreshSchedule    refreshLoopSchedule
+	refreshClaimSeq    uint64
 
 	pendingEvents    []clientEvent
 	eventDispatching bool
@@ -77,6 +81,7 @@ func New(cfg Config, flow AuthFlowHandler, opts ...Option) (*Client, error) { //
 		store:   options.store,
 		emitter: options.emitter,
 		logger:  options.logger,
+		clock:   systemRefreshClock{},
 	}
 
 	c.httpClient = options.httpClient
@@ -129,7 +134,10 @@ func (noopEmitter) Emit(_ string, _ any) {}
 
 // now returns the current time. Can be overridden in tests.
 func (c *Client) now() time.Time {
-	return time.Now()
+	if c.clock == nil {
+		return time.Now()
+	}
+	return c.clock.Now()
 }
 
 // tokenExpiryBuffer is subtracted from the token expiry to avoid using
@@ -145,6 +153,9 @@ func (c *Client) AuthStatus() AuthStatusResult {
 	if c.state.IsZero() {
 		return AuthStatusResult{}
 	}
+	if c.refreshIntegrityBlockedLocked() {
+		return AuthStatusResult{}
+	}
 
 	now := c.now()
 	valid := now.Before(c.state.ExpiresAt.Add(-tokenExpiryBuffer))
@@ -156,7 +167,7 @@ func (c *Client) AuthStatus() AuthStatusResult {
 		graceEnd := c.state.LastAuthAt.Add(c.config.GracePeriod)
 		if now.Before(graceEnd) {
 			graceMode = true
-			graceDaysLeft = int(time.Until(graceEnd).Hours() / 24)
+			graceDaysLeft = int(graceEnd.Sub(now).Hours() / 24)
 		}
 	}
 
@@ -191,14 +202,53 @@ func (c *Client) RestoreSession() bool {
 	return true
 }
 
-// setStateLocked replaces the in-memory token state and advances its semantic
-// revision when the state materially changes. c.mu must be held.
+// setStateLocked replaces the in-memory token state when it materially changes.
+// c.mu must be held.
 func (c *Client) setStateLocked(state *TokenState) {
 	if c.state == *state {
 		return
 	}
+	c.advanceStateLocked(state)
+}
+
+// advanceStateLocked installs a new semantic token generation even if a
+// provider returned byte-for-byte equal values. c.mu must be held.
+func (c *Client) advanceStateLocked(state *TokenState) {
 	c.state = *state
 	c.stateRevision++
+	c.refreshSchedule = refreshLoopSchedule{}
+	c.signalRefreshLoopLocked()
+}
+
+// signalRefreshLoopLocked wakes every refresh-loop observer without allowing
+// one canceled runner to consume another runner's notification. c.mu must be
+// held.
+func (c *Client) signalRefreshLoopLocked() {
+	if c.refreshWake != nil {
+		close(c.refreshWake)
+	}
+	c.refreshWake = make(chan struct{})
+}
+
+// refreshWakeLocked returns the current close-and-replace broadcast channel.
+// c.mu must be held.
+func (c *Client) refreshWakeLocked() <-chan struct{} {
+	if c.refreshWake == nil {
+		c.refreshWake = make(chan struct{})
+	}
+	return c.refreshWake
+}
+
+func (c *Client) refreshIntegrityBlockedLocked() bool {
+	return c.refreshSchedule.valid &&
+		c.refreshSchedule.revision == c.stateRevision &&
+		c.refreshSchedule.disposition == refreshLoopBlockedIntegrity
+}
+
+func (c *Client) refreshPermanentlyBlockedLocked() bool {
+	return c.refreshSchedule.valid &&
+		c.refreshSchedule.revision == c.stateRevision &&
+		c.refreshSchedule.disposition == refreshLoopBlockedPermanent
 }
 
 // Init performs OIDC discovery and configures the OAuth2 client.
@@ -240,6 +290,7 @@ func (c *Client) Init(ctx context.Context) error {
 	if err := provider.Claims(&claims); err == nil && claims.EndSessionEndpoint != "" {
 		c.endSessionEndpoint = claims.EndSessionEndpoint
 	}
+	c.signalRefreshLoopLocked()
 
 	return nil
 }
