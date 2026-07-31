@@ -42,9 +42,19 @@ chore: bump go-oidc v3.18.0 to v3.19.0
 
 ```bash
 go test ./...
+go test -race -coverprofile=coverage.out ./...
+go test ./.github/scripts/coveragecheck
+go run ./.github/scripts/coveragecheck -profile coverage.out
 ```
 
 All tests must pass without a real OIDC provider. The `oidctest` package provides `FakeIDPServer` and test doubles for all interfaces.
+
+The coverage policy applies to library packages, not `examples`, although
+examples remain part of `go test ./...`. Initial statement floors are 88% for
+the root package; 80% for `desktopflow`, `eventbus`, `filestore`, and
+`mobileflow`; 70% for `oidctest` and future packages; and 80% for the weighted
+library aggregate. The checker compares exact covered/total statement counts,
+not rounded display percentages.
 
 ## Code Guidelines
 

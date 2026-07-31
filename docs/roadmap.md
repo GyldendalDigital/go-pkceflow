@@ -97,7 +97,7 @@ Current status: **Pre-1.0 beta hardening**
 
 ## Before Dogfooding
 
-- [ ] Complete coverage and edge-path hardening
+- [x] Complete coverage and edge-path hardening
   ([#43](https://github.com/GyldendalDigital/go-pkceflow/issues/43)).
 - [x] Correct the refresh scheduler so retries follow explicit 50%, 25%, 12.5%
   lifetime stages and stop at access-token expiry

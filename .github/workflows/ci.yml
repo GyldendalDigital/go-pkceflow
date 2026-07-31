@@ -27,8 +27,15 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v7
         with:
-          name: coverage
+          name: coverage-all-packages
           path: coverage.out
+          if-no-files-found: error
+
+      - name: Test coverage checker
+        run: go test ./.github/scripts/coveragecheck
+
+      - name: Enforce coverage policy
+        run: go run ./.github/scripts/coveragecheck -profile coverage.out
 
   cross-test:
     name: Cross-platform test (${{ matrix.os }})
