@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Test
+  test-linux:
+    name: Linux race and coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -54,8 +54,27 @@ jobs:
       - name: Run tests
         run: go test ./...
 
-  build:
-    name: Build
+  test:
+    name: Test
+    if: ${{ always() }}
+    needs: [test-linux, cross-test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful test workers
+        env:
+          LINUX_RESULT: ${{ needs['test-linux'].result }}
+          MATRIX_RESULT: ${{ needs['cross-test'].result }}
+        shell: bash
+        run: |
+          echo "Linux race and coverage: $LINUX_RESULT"
+          echo "Cross-platform test matrix: $MATRIX_RESULT"
+          if [ "$LINUX_RESULT" != "success" ] || [ "$MATRIX_RESULT" != "success" ]; then
+            echo "::error::One or more required test workers did not succeed"
+            exit 1
+          fi
+
+  build-linux:
+    name: Linux build and module hygiene
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -88,6 +107,25 @@ jobs:
 
       - name: Build
         run: go build ./...
+
+  build:
+    name: Build
+    if: ${{ always() }}
+    needs: [build-linux, cross-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful build workers
+        env:
+          LINUX_RESULT: ${{ needs['build-linux'].result }}
+          MATRIX_RESULT: ${{ needs['cross-build'].result }}
+        shell: bash
+        run: |
+          echo "Linux build and module hygiene: $LINUX_RESULT"
+          echo "Cross-platform build matrix: $MATRIX_RESULT"
+          if [ "$LINUX_RESULT" != "success" ] || [ "$MATRIX_RESULT" != "success" ]; then
+            echo "::error::One or more required build workers did not succeed"
+            exit 1
+          fi
 
   govulncheck:
     name: Govulncheck
