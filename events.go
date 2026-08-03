@@ -26,7 +26,9 @@ const (
 	EventLoggedOut = "oidcauth:logged-out"
 
 	// EventTokenRefreshed is emitted after any successful token refresh,
-	// including one triggered synchronously by AccessToken.
+	// including one triggered synchronously by AccessToken. It describes the
+	// committed in-memory generation and is not repeated if persistence needs
+	// to recover that generation in the background.
 	EventTokenRefreshed = "oidcauth:token-refreshed" //nolint:gosec // G101 false positive: not a credential
 
 	// EventSessionExpired is emitted when the refresh token is permanently

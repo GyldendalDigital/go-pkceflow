@@ -44,15 +44,18 @@ type Client struct {
 	verifier      *oidc.IDTokenVerifier
 	oauth2        *oauth2.Config
 
-	endSessionEndpoint string
-	refreshRun         *refreshLoopHandle
-	refreshAttempt     *refreshAttempt
-	refreshWake        chan struct{}
-	refreshSchedule    refreshLoopSchedule
-	refreshClaimSeq    uint64
-	lifecycleSeq       uint64
-	lifecycleOperation *lifecycleOperation
-	lifecycleFlow      chan struct{}
+	endSessionEndpoint  string
+	refreshRun          *refreshLoopHandle
+	refreshAttempt      *refreshAttempt
+	refreshWake         chan struct{}
+	refreshSchedule     refreshLoopSchedule
+	refreshClaimSeq     uint64
+	persistenceRetry    persistenceRetryState
+	persistenceClaimSeq uint64
+	restoreBlocked      bool
+	lifecycleSeq        uint64
+	lifecycleOperation  *lifecycleOperation
+	lifecycleFlow       chan struct{}
 
 	pendingEvents    []clientEvent
 	eventDispatching bool
@@ -189,23 +192,44 @@ func (c *Client) AuthStatus() AuthStatusResult {
 // RestoreSession loads persisted tokens into memory.
 // Returns true if a usable session was found.
 // Does NOT require network (works before Init).
+//
+// A locally logged-out Client does not restore again; create a new Client for a
+// new application lifetime. If the current in-memory generation has unresolved
+// persistence, it remains authoritative and RestoreSession does not replace it
+// with an uncertain older stored generation.
 func (c *Client) RestoreSession() bool {
 	c.stateCommitMu.Lock()
-	defer c.stateCommitMu.Unlock()
+	c.mu.Lock()
+	if c.restoreBlocked {
+		c.mu.Unlock()
+		c.stateCommitMu.Unlock()
+		return false
+	}
+	if c.persistenceRetry.valid &&
+		c.persistenceRetry.revision == c.stateRevision {
+		restored := !c.state.IsZero()
+		c.mu.Unlock()
+		c.stateCommitMu.Unlock()
+		return restored
+	}
+	c.mu.Unlock()
 
 	state, err := c.store.Load()
 	if err != nil {
-		c.logger.Warn("failed to load persisted session", "error", err)
+		c.stateCommitMu.Unlock()
+		c.logger.Warn("failed to load persisted session")
 		return false
 	}
 
 	if state.IsZero() {
+		c.stateCommitMu.Unlock()
 		return false
 	}
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.setStateLocked(&state)
+	c.mu.Unlock()
+	c.stateCommitMu.Unlock()
 	return true
 }
 
@@ -224,6 +248,8 @@ func (c *Client) advanceStateLocked(state *TokenState) {
 	c.state = *state
 	c.stateRevision++
 	c.refreshSchedule = refreshLoopSchedule{}
+	c.persistenceRetry = persistenceRetryState{}
+	c.restoreBlocked = false
 	c.signalRefreshLoopLocked()
 }
 

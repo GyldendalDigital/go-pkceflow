@@ -54,18 +54,28 @@ type LogoutFlowHandler interface {
 // implement this interface and inject it via WithTokenPersistence, with no other
 // code changes.
 //
-// Client serializes calls to these methods with token-state transitions.
-// Implementations must not synchronously call back into Client methods that can
-// mutate or refresh token state.
+// One Client serializes calls to these methods with token-state transitions.
+// Implementations that let multiple active Clients share one storage namespace
+// must provide their own cross-Client ordering.
+//
+// Methods must complete synchronously and must not continue mutating storage
+// after they return. They must not synchronously call back into Client methods
+// that can mutate or refresh token state.
 type TokenPersistence interface {
-	// Save persists the token state. Called after login and token refresh.
+	// Save atomically replaces the complete persisted token state. It must be
+	// idempotent: Client may retry the same state after an error.
+	//
+	// An error has an indeterminate durability outcome because a backend may
+	// fail before or after publishing its replacement. Once Save returns nil, a
+	// later Load must return that state unless a newer Save or Delete completed.
 	Save(state TokenState) error
 
 	// Load retrieves persisted token state. Returns zero TokenState (not error)
 	// if no state exists or the stored data is corrupted/unreadable.
 	Load() (TokenState, error)
 
-	// Delete removes persisted token state. Called on logout.
+	// Delete removes persisted token state. Called on logout and must be
+	// idempotent.
 	Delete() error
 }
 

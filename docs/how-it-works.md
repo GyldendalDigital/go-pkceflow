@@ -116,6 +116,19 @@ then one eighth, and so on) without starting a request after the token expires.
 Expiry itself never opens the browser or forces sign-in; the app's configured
 grace period still determines whether offline use may continue.
 
+If a refresh succeeds at the provider but saving the new tokens fails, the
+running app keeps using the verified new generation. Rolling back could restore
+a refresh token that the provider already invalidated during rotation. While
+the refresh loop is active, go-pkceflow retries only the local Save with
+exponential backoff; it does not repeat the provider request or the refreshed
+event. Logout or a newer Login safely supersedes stale retry work.
+
+Until one of those Save attempts returns success, the next process start may
+find the previous tokens, the new tokens, or no readable tokens, depending on
+where storage failed. A stale rotated token may require reauthentication, but
+expiry or recovery failure never opens the browser automatically. Grace still
+controls whether offline app use is allowed.
+
 go-pkceflow requests `openid profile email offline_access` by default. The
 first three request sign-in and profile claims. `offline_access` asks for a
 refresh token, but providers apply their own policy: Keycloak also needs the

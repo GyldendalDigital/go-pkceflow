@@ -13,8 +13,10 @@ import (
 
 // Login starts the OIDC Authorization Code flow with PKCE.
 // It opens the authorization URL via the configured AuthFlowHandler,
-// waits for the callback, exchanges the code for tokens, validates
-// the ID token, persists the result, and emits EventLoggedIn.
+// waits for the callback, exchanges the code for tokens, validates the ID
+// token, commits the result, and emits EventLoggedIn. A persistence error does
+// not roll back or fail the Login; StartRefreshLoop retries that committed
+// generation separately.
 //
 // On one Client, an admitted Login supersedes any older Login or pending RP
 // logout. The older Login returns ErrFlowCancelled and cannot persist a late
@@ -200,10 +202,10 @@ func (c *Client) Login(ctx context.Context) error {
 	if !committed {
 		return ErrFlowCancelled
 	}
-
 	if persistErr != nil {
-		c.logger.Warn("failed to persist tokens after login", "error", persistErr)
+		c.logPersistenceSaveFailure()
 	}
+
 	return nil
 }
 
@@ -229,8 +231,10 @@ func (c *Client) commitLoginState(
 
 	c.mu.Lock()
 	c.advanceStateLocked(newState)
+	revision := c.stateRevision
 	c.mu.Unlock()
 	persistErr := c.store.Save(*newState)
+	c.recordPersistenceSaveResult(revision, persistErr, c.now())
 	shouldDrain := c.enqueueEvent(EventLoggedIn, nil)
 	c.stateCommitMu.Unlock()
 	c.lifecycleMu.Unlock()

@@ -355,13 +355,15 @@ func (c *Client) performRefresh(
 		return current, false, nil
 	}
 	c.advanceStateLocked(&newState)
+	committedRevision := c.stateRevision
 	c.mu.Unlock()
 	persistErr := c.store.Save(newState)
+	c.recordPersistenceSaveResult(committedRevision, persistErr, c.now())
 	shouldDrain := c.enqueueEvent(EventTokenRefreshed, nil)
 	c.stateCommitMu.Unlock()
 
 	if persistErr != nil {
-		c.logger.Warn("failed to persist refreshed tokens", "error", persistErr)
+		c.logPersistenceSaveFailure()
 	}
 	return newState, shouldDrain, nil
 }

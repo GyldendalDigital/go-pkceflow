@@ -68,7 +68,7 @@ type refreshLoopHandle struct {
 	done   chan struct{}
 }
 
-// StartRefreshLoop starts a background goroutine that refreshes the access token.
+// StartRefreshLoop starts background token refresh and persistence recovery.
 //
 // For each token generation, the first attempt occurs when 50% of its original
 // lifetime remains. Temporary failures retry at 25%, 12.5%, and later halving
@@ -81,8 +81,14 @@ type refreshLoopHandle struct {
 // session-integrity error parks and emits immediately despite grace. New Login,
 // RestoreSession, or successful on-demand refresh state wakes the supervisor.
 //
+// If saving a successful Login or refresh reports an error, the committed state
+// remains authoritative in memory. While this loop is active, persistence is
+// retried independently after 1s, 2s, 4s, and later exponential delays capped
+// at one minute. Recovery does not repeat the token grant or auth event.
+//
 // Calling StartRefreshLoop again stops the previous runner without resetting
-// the current token generation's retry stage or terminal disposition.
+// the current token generation's retry stage, terminal disposition, or pending
+// persistence recovery.
 // Use StopRefreshLoop for explicit shutdown.
 func (c *Client) StartRefreshLoop(ctx context.Context) {
 	c.startRefreshLoop(ctx, c.refreshLoop)
@@ -126,8 +132,9 @@ func (c *Client) startRefreshLoop(
 	return handle
 }
 
-// StopRefreshLoop cancels the background refresh loop if one is running. It
-// does not wait for the loop goroutine to finish.
+// StopRefreshLoop cancels the background refresh and persistence supervisors if
+// they are running. It does not forget pending persistence recovery and does not
+// wait for a supervisor or an already-running TokenPersistence call to finish.
 func (c *Client) StopRefreshLoop() {
 	c.mu.Lock()
 	handle := c.refreshRun
@@ -173,7 +180,13 @@ type refreshLoopAttemptFunc func(
 ) refreshLoopAttemptResult
 
 func (c *Client) refreshLoop(ctx context.Context) {
+	persistenceDone := make(chan struct{})
+	go func() {
+		defer close(persistenceDone)
+		c.runPersistenceRetryLoop(ctx)
+	}()
 	c.runRefreshLoop(ctx, c.doRefresh)
+	<-persistenceDone
 }
 
 func (c *Client) runRefreshLoop(

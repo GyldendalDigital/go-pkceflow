@@ -113,9 +113,11 @@ a refresh token for an API:
 - keep `offline_access` in `Config.Scopes`.
 
 Refresh Token Rotation is supported and recommended for native clients. When
-Auth0 rotates a token, go-pkceflow persists the replacement before the next
-refresh. Configure rotation and expiration to match your application's session
-policy; those are provider policy decisions, not client-library defaults.
+Auth0 rotates a token, go-pkceflow installs the replacement in memory and
+persists it. If storage reports a failure, the active refresh loop retries that
+same generation without repeating the Auth0 grant. Configure rotation and
+expiration to match your application's session policy; those are provider
+policy decisions, not client-library defaults.
 
 ## 6. Run go-pkceflow against it
 
@@ -146,7 +148,7 @@ custom API.
 | Allowed Logout URLs | `handler.PostLogoutRedirectURI()` | Separate list; register logout path |
 | API Identifier | `ExtraAuthParams["audience"]` | Optional for login; required when targeting that API |
 | API Allow Offline Access | Default `offline_access` scope | Required when a refresh token is expected for that API |
-| Refresh Token Rotation | Automatic persistence | Rotated refresh tokens replace the previous token |
+| Refresh Token Rotation | Revision-fenced persistence recovery | Rotated tokens replace the previous generation; failed local saves are retried |
 
 ## Why Native is low maintenance
 
