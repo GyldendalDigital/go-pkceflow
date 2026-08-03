@@ -23,8 +23,9 @@ var (
 	// This indicates a potential token replay or injection attack.
 	ErrNonceMismatch = errors.New("pkceflow: nonce mismatch")
 
-	// ErrFlowCancelled is returned when the auth flow is cancelled,
-	// either by context cancellation or user action.
+	// ErrFlowCancelled is returned when Login is cancelled by its context,
+	// times out, is cancelled by user action, or is superseded by a newer Login
+	// or Logout on the same Client.
 	ErrFlowCancelled = errors.New("pkceflow: auth flow cancelled")
 
 	// ErrNotAuthenticated is returned by methods that require an authenticated

@@ -93,8 +93,11 @@ Only one mobile login or logout browser flow can be active at a time; a second
 attempt returns `mobileflow.ErrFlowInProgress`.
 
 This guard protects callback routing inside the handler. It does not serialize
-all higher-level client operations, so the application should also prevent
-overlapping `Client.Login` and `Client.Logout` commands.
+the handler across separate Client instances. Within one Client, core lifecycle
+ordering cancels the older login/logout operation and waits for its handler call
+to release before starting the replacement; overlapping Logout calls coalesce.
+Framework-level busy guards remain useful for avoiding overlapping browser UX,
+but are not the correctness boundary.
 
 ### iOS (SwiftUI, conceptually)
 

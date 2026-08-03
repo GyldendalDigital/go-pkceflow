@@ -26,10 +26,13 @@ type Client struct {
 
 	httpClient *http.Client // nil = library default; routes all outbound HTTP
 
-	// Refresh registration acquires refreshMu before mu. State transitions
-	// acquire stateCommitMu before mu and may then enqueue events under eventMu.
-	// Persistence runs under stateCommitMu but never mu; token endpoint work and
-	// EventEmitter callbacks hold none of these locks.
+	// Lifecycle replacement and Login/Logout commits acquire lifecycleMu before
+	// stateCommitMu. Refresh registration acquires refreshMu before mu. State
+	// transitions acquire stateCommitMu before mu and may then enqueue events
+	// under eventMu. Persistence runs under stateCommitMu but never mu; browser
+	// flows, token endpoint work, and EventEmitter callbacks hold none of these
+	// locks.
+	lifecycleMu   sync.Mutex
 	stateCommitMu sync.Mutex
 	refreshMu     sync.Mutex
 	eventMu       sync.Mutex
@@ -47,6 +50,9 @@ type Client struct {
 	refreshWake        chan struct{}
 	refreshSchedule    refreshLoopSchedule
 	refreshClaimSeq    uint64
+	lifecycleSeq       uint64
+	lifecycleOperation *lifecycleOperation
+	lifecycleFlow      chan struct{}
 
 	pendingEvents    []clientEvent
 	eventDispatching bool
@@ -76,12 +82,13 @@ func New(cfg Config, flow AuthFlowHandler, opts ...Option) (*Client, error) { //
 	}
 
 	c := &Client{
-		config:  cfg,
-		flow:    flow,
-		store:   options.store,
-		emitter: options.emitter,
-		logger:  options.logger,
-		clock:   systemRefreshClock{},
+		config:        cfg,
+		flow:          flow,
+		store:         options.store,
+		emitter:       options.emitter,
+		logger:        options.logger,
+		clock:         systemRefreshClock{},
+		lifecycleFlow: make(chan struct{}, 1),
 	}
 
 	c.httpClient = options.httpClient

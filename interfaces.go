@@ -11,7 +11,9 @@ import "context"
 type AuthFlowHandler interface {
 	// StartAuthFlow opens the authorization URL and waits for the callback.
 	// Returns the full callback URL including query parameters (code, state, error).
-	// The context controls timeout/cancellation of the flow.
+	// The context controls timeout/cancellation of the flow. Implementations must
+	// stop waiting and return promptly when it is cancelled. A handler must not
+	// synchronously call Login or Logout on the same Client before returning.
 	StartAuthFlow(ctx context.Context, authURL string) (callbackURL string, err error)
 
 	// RedirectURI returns the redirect URI that this handler listens on.
@@ -29,7 +31,8 @@ type AuthFlowHandler interface {
 // StartAuthFlow and RedirectURI (the same URI as login), disambiguated by state.
 type LogoutFlowHandler interface {
 	// StartLogoutFlow opens the end-session URL and waits for the post-logout
-	// callback, mirroring StartAuthFlow but for the logout redirect.
+	// callback, mirroring StartAuthFlow but for the logout redirect. The same
+	// cancellation and non-reentrancy requirements as StartAuthFlow apply.
 	StartLogoutFlow(ctx context.Context, logoutURL string) (callbackURL string, err error)
 
 	// PostLogoutRedirectURI returns the URI to send as post_logout_redirect_uri.

@@ -102,7 +102,13 @@ Current status: **Pre-1.0 beta hardening**
 - [x] Correct the refresh scheduler so retries follow explicit 50%, 25%, 12.5%
   lifetime stages and stop at access-token expiry
   ([#55](https://github.com/GyldendalDigital/go-pkceflow/issues/55)).
-- [ ] Harden mobile callback filtering and active-flow handling.
+- [x] Harden mobile callback filtering and active-flow handling.
+- [x] Define deterministic overlapping Login/Logout semantics
+  ([#58](https://github.com/GyldendalDigital/go-pkceflow/issues/58)).
+- [ ] Define refresh durability when persistence fails
+  ([#63](https://github.com/GyldendalDigital/go-pkceflow/issues/63)).
+- [ ] Make native OS matrix failures gate protected merges
+  ([#64](https://github.com/GyldendalDigital/go-pkceflow/issues/64)).
 - [ ] Reconcile the wrapper dependency pin and stale completed issues.
 - [ ] Validate mobile deep-link delivery on an emulator/device
   ([wrapper #8](https://github.com/GyldendalDigital/wails-pkceflow/issues/8)).
