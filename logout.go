@@ -13,6 +13,12 @@ import (
 // In-memory state is always cleared and persistent deletion is attempted,
 // regardless of RP-Initiated Logout success. Persistence deletion failures are
 // logged and do not change the returned result.
+//
+// Logout supersedes an older Login before clearing state. A concurrent Logout
+// returns after the active Logout's local commit, without waiting for its
+// provider round trip. A newer Login may cancel a pending best-effort RP browser
+// round trip after local logout has committed; it cannot recall a provider page
+// that was already opened.
 func (c *Client) Logout(ctx context.Context) error {
 	// Apply logout timeout
 	if c.config.LogoutTimeout > 0 {
@@ -20,6 +26,14 @@ func (c *Client) Logout(ctx context.Context) error {
 		ctx, cancel = context.WithTimeout(ctx, c.config.LogoutTimeout)
 		defer cancel()
 	}
+
+	c.lifecycleMu.Lock()
+	if c.lifecycleOperation != nil && c.lifecycleOperation.kind == lifecycleLogout {
+		c.lifecycleMu.Unlock()
+		return nil
+	}
+	operation := c.beginLifecycleOperationLocked(ctx, lifecycleLogout)
+	defer c.finishLifecycleOperation(operation)
 
 	c.stateCommitMu.Lock()
 	c.mu.Lock()
@@ -31,6 +45,7 @@ func (c *Client) Logout(ctx context.Context) error {
 	persistErr := c.store.Delete()
 	shouldDrain := c.enqueueEvent(EventLoggedOut, nil)
 	c.stateCommitMu.Unlock()
+	c.lifecycleMu.Unlock()
 
 	if persistErr != nil {
 		c.logger.Warn("failed to delete persisted tokens", "error", persistErr)
@@ -41,16 +56,25 @@ func (c *Client) Logout(ctx context.Context) error {
 
 	// RP-Initiated Logout if supported
 	if endSessionEndpoint != "" && idToken != "" {
-		c.doRPLogout(ctx, endSessionEndpoint, idToken)
+		c.doRPLogout(operation, endSessionEndpoint, idToken)
 	}
 
 	return nil
 }
 
-// doRPLogout performs RP-Initiated Logout via the flow handler. All failures are
-// logged as warnings and swallowed: local logout has already succeeded, so a
-// failed browser round-trip must not surface as a logout error.
-func (c *Client) doRPLogout(ctx context.Context, endSessionEndpoint, idToken string) {
+// doRPLogout performs RP-Initiated Logout via the flow handler. Non-cancellation
+// failures are logged as warnings and all failures are swallowed: local logout
+// has already succeeded, so a failed browser round-trip must not surface as a
+// logout error.
+func (c *Client) doRPLogout(
+	operation *lifecycleOperation,
+	endSessionEndpoint string,
+	idToken string,
+) {
+	if !c.lifecycleOperationCurrent(operation) {
+		return
+	}
+
 	// Resolve the post-logout redirect URI and the flow used to capture the
 	// callback. Handlers that support a distinct logout redirect implement
 	// LogoutFlowHandler; otherwise fall back to the login redirect and flow.
@@ -76,9 +100,15 @@ func (c *Client) doRPLogout(ctx context.Context, endSessionEndpoint, idToken str
 		return
 	}
 
-	callbackURL, err := startFlow(ctx, logoutURL)
+	callbackURL, err := c.runLifecycleFlow(operation, func(flowCtx context.Context) (string, error) {
+		return startFlow(flowCtx, logoutURL)
+	})
 	if err != nil {
-		c.logger.Warn("RP-Initiated Logout failed", "error", err)
+		if err != ErrFlowCancelled {
+			// Handler errors are intentionally omitted: a handler may echo the
+			// logout URL, which contains the ID token hint.
+			c.logger.Warn("RP-Initiated Logout flow failed")
+		}
 		return
 	}
 

@@ -142,6 +142,20 @@ The library does not call a provider revocation endpoint. A provider may keep
 the discarded refresh/offline grant valid until its own expiry or
 administrative revocation policy ends it.
 
+## What if login and logout overlap?
+
+Within one Client, the latest valid command takes ownership, except that
+overlapping Logout calls coalesce. Starting Logout cancels an older Login and
+clears local state immediately. Even if that older browser callback or token
+response arrives late, it cannot save tokens or emit a logged-in event. Starting
+a new Login can cancel a Logout that is still waiting for its best-effort
+provider callback, after the local logout has already completed.
+
+The Client briefly serializes access to the platform browser handler so a
+cancelled mobile callback waiter can clean up before its replacement starts.
+Independent Clients remain independent. A UI is still free to reject a second
+button press instead of preempting the first command.
+
 ## What this library solves
 
 - Public-client PKCE login and logout for desktop and mobile (no client secret).

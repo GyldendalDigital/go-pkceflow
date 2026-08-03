@@ -62,14 +62,43 @@ The desktop handler does not spin up a fresh listener per flow. Instead a single
 reference-counted **broker** binds the loopback port lazily on the first flow and
 serves every in-flight flow from one mux. Each flow registers a one-shot waiter
 keyed by `path + state`; an incoming callback is routed to the matching waiter,
-so concurrent logins (or a login and a logout) never collide on the port and a
-callback only resolves the flow that started it. Unmatched or stale callbacks get
-the same success page as matched ones, so a local process cannot probe for live
-flows. The port is released a short grace period after the last flow clears.
+so concurrent handler users never collide on the port and a callback only
+resolves the flow that started it. This concurrency remains available to
+independent Clients and direct handler users; one Client applies the lifecycle
+ordering described below. Unmatched or stale callbacks get the same success page
+as matched ones, so a local process cannot probe for live flows. The port is
+released a short grace period after the last flow clears.
 
 For `localhost`, the broker binds both `127.0.0.1` and `[::1]` (succeeding if at
 least one binds) so a callback is captured regardless of how the OS resolves the
 name. It never binds a wildcard address.
+
+## Client lifecycle ordering
+
+Each Client admits one current login/logout operation identity. A newly admitted
+Login or Logout cancels the previous operation; overlapping Logout calls are the
+exception and coalesce. Login checks that identity and its context inside the
+same critical section that commits token state, persistence, and
+`oidcauth:logged-in`; a late callback or token response therefore cannot
+resurrect a session after Logout. A pre-cancelled Login and a Login attempted
+before successful discovery are rejected before admission and do not disturb an
+active operation.
+
+Logout is the local security boundary. It atomically supersedes an older Login,
+clears memory, attempts persistent deletion, and queues `oidcauth:logged-out`
+before any RP-Initiated Logout browser round trip. Concurrent Logout calls
+coalesce so only one local event and one provider round trip are attempted. A
+newer Login can cancel a pending RP callback wait, but it cannot recall a logout
+page already opened at the provider.
+
+A narrow, context-aware permit serializes only calls into one Client's flow
+handler. This lets a cancelled mobile waiter unregister before its replacement
+starts. Token exchange, persistence, event delivery, and local logout do not hold
+that permit. Separate Clients have separate operation identities and permits.
+
+Framework adapters can apply stricter UX rules. `wails-pkceflow`, for example,
+rejects a second frontend command as `flow_in_progress`; core ordering remains
+the correctness layer for direct Client calls and other integrations.
 
 ## Reading ID token claims
 

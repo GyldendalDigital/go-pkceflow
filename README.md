@@ -13,7 +13,8 @@ validation before a stable release.
 
 - OIDC discovery and PKCE S256 authorization code flow
 - Desktop auth via localhost callback server and system browser
-- Shared localhost callback broker (concurrent logins/logout, no port conflicts)
+- Shared localhost callback broker (safe concurrency across independent clients)
+- Deterministic per-client ordering for overlapping login and logout commands
 - Mobile auth via deep links (Universal Links / App Links)
 - RP-Initiated Logout with separate, correlated post-logout redirect URIs
 - ID token claims decoding (`client.Claims()`)
@@ -136,6 +137,21 @@ later refresh requests.
 
 Use `WithHTTPClient` when discovery, JWKS, and token requests need a proxy,
 custom CA bundle, mutual TLS, or transport tuning.
+
+## Concurrent Login and Logout
+
+Lifecycle ordering is scoped to one `Client`. The latest admitted `Login` or
+`Logout` supersedes an older browser operation, except that overlapping Logout
+calls coalesce. A superseded login returns `ErrFlowCancelled` and cannot persist
+tokens or emit `oidcauth:logged-in`, even if its handler or HTTP transport
+returns a late result. Logout clears local state and attempts persistent deletion
+before its best-effort provider logout round trip.
+
+Browser handler calls on one Client are handed off serially so a cancelled
+mobile deep-link waiter can unregister before its replacement begins. Separate
+Client instances remain independent and may use the desktop callback broker
+concurrently. UI adapters may still reject overlapping commands as a user
+experience guard; the Wails wrapper returns `flow_in_progress` for that case.
 
 ## Documentation
 
