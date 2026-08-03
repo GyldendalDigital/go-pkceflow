@@ -107,7 +107,7 @@ Current status: **Pre-1.0 beta hardening**
   ([#58](https://github.com/GyldendalDigital/go-pkceflow/issues/58)).
 - [x] Define refresh durability when persistence fails
   ([#63](https://github.com/GyldendalDigital/go-pkceflow/issues/63)).
-- [ ] Make native OS matrix failures gate protected merges
+- [x] Make native OS matrix failures gate protected merges
   ([#64](https://github.com/GyldendalDigital/go-pkceflow/issues/64)).
 - [ ] Reconcile the wrapper dependency pin and stale completed issues.
 - [ ] Validate mobile deep-link delivery on an emulator/device
