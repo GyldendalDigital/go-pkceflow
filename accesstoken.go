@@ -13,6 +13,8 @@ import "context"
 // and surfaces as an empty string. A successful refresh emits
 // EventTokenRefreshed, whether triggered here or by the background loop. Only
 // the background refresh loop emits EventSessionExpired on a permanent failure.
+// A persistence failure does not roll back a successful refresh; StartRefreshLoop
+// retries that committed generation separately.
 // Grace is evaluated after any attempted refresh has completed.
 // A permanent failure discovered here still parks that token generation so a
 // later Start or Resume does not retry a known-invalid refresh token.

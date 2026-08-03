@@ -105,7 +105,7 @@ Current status: **Pre-1.0 beta hardening**
 - [x] Harden mobile callback filtering and active-flow handling.
 - [x] Define deterministic overlapping Login/Logout semantics
   ([#58](https://github.com/GyldendalDigital/go-pkceflow/issues/58)).
-- [ ] Define refresh durability when persistence fails
+- [x] Define refresh durability when persistence fails
   ([#63](https://github.com/GyldendalDigital/go-pkceflow/issues/63)).
 - [ ] Make native OS matrix failures gate protected merges
   ([#64](https://github.com/GyldendalDigital/go-pkceflow/issues/64)).

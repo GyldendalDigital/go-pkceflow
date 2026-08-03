@@ -12,7 +12,9 @@ import (
 // the user is redirected to the IdP's logout page via the AuthFlowHandler.
 // In-memory state is always cleared and persistent deletion is attempted,
 // regardless of RP-Initiated Logout success. Persistence deletion failures are
-// logged and do not change the returned result.
+// logged and do not change the returned result. RestoreSession will not reload
+// state into the same locally logged-out Client even if deletion failed; a new
+// process cannot share that in-memory tombstone.
 //
 // Logout supersedes an older Login before clearing state. A concurrent Logout
 // returns after the active Logout's local commit, without waiting for its
@@ -41,6 +43,9 @@ func (c *Client) Logout(ctx context.Context) error {
 	endSessionEndpoint := c.endSessionEndpoint
 	// Clear in-memory state immediately.
 	c.setStateLocked(&TokenState{})
+	c.persistenceRetry = persistenceRetryState{}
+	c.restoreBlocked = true
+	c.signalRefreshLoopLocked()
 	c.mu.Unlock()
 	persistErr := c.store.Delete()
 	shouldDrain := c.enqueueEvent(EventLoggedOut, nil)
@@ -48,7 +53,7 @@ func (c *Client) Logout(ctx context.Context) error {
 	c.lifecycleMu.Unlock()
 
 	if persistErr != nil {
-		c.logger.Warn("failed to delete persisted tokens", "error", persistErr)
+		c.logger.Warn("failed to delete persisted tokens")
 	}
 	if shouldDrain {
 		c.drainEvents()

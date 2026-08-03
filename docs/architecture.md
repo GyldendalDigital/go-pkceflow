@@ -100,6 +100,44 @@ Framework adapters can apply stricter UX rules. `wails-pkceflow`, for example,
 rejects a second frontend command as `flow_in_progress`; core ordering remains
 the correctness layer for direct Client calls and other integrations.
 
+## Persistence durability and recovery
+
+A successful Login or verified refresh first installs a new semantic
+`stateRevision`, then calls `TokenPersistence.Save` while holding the state
+commit lock. If Save reports an error, the in-memory generation remains
+authoritative. Rolling back could restore a refresh token that a rotating
+provider has already invalidated.
+
+The failed revision is marked dirty without copying its tokens into retry
+metadata. While `StartRefreshLoop` is active, a separate local supervisor
+retries Save after 1, 2, 4, and later seconds, capped at one minute. Each retry
+claims the exact revision, acquires the state commit lock, rechecks the claim,
+and holds that lock through Save. A newer Login or refresh therefore persists
+after an older in-flight retry, while Logout invalidates queued work and runs
+Delete after any retry already in progress. Recovery never repeats a token
+grant, advances the revision, or emits another auth event.
+
+Save errors have an indeterminate publication outcome: a backend can fail
+before writing, after publishing the replacement, or after removing an
+unreadable old value. Until a retry returns nil, a new process may restore the
+old state, the new state, or no state. An old rotated refresh token may be
+rejected, after which normal grace and explicit Login policy apply. The
+Client never compensates with Delete, never rolls memory back, and never forces
+browser Login.
+
+`StopRefreshLoop` pauses queued recovery but cannot interrupt a synchronous
+TokenPersistence call already in progress. Pending state survives a later
+Start. Persistence methods must be synchronous and idempotent; one Client's
+locking does not order two active Clients sharing the same storage namespace.
+Arbitrary backend errors are not included in logs because they may contain
+credentials.
+
+Logout also installs a private in-memory tombstone after clearing state and
+invalidating Save recovery. `RestoreSession` cannot reload tokens into that
+same Client, even when Delete failed and storage still contains them. The
+tombstone cannot survive process restart, so failed Delete retains the
+documented uncertain restart behavior.
+
 ## Reading ID token claims
 
 `Client.Claims()` decodes the current session's ID token into a `Claims` struct
@@ -164,12 +202,14 @@ making more network attempts while grace remains. A session-integrity failure
 parks and emits immediately despite grace, and the affected generation fails
 closed in `AccessToken` and `AuthStatus`.
 
-Stopping and restarting the loop does not reset a generation's retry stage or
-terminal disposition. Token state with missing or inconsistent lifetime
-timestamps has no safe background schedule and remains idle.
+Stopping and restarting the loop does not reset a generation's refresh retry
+stage, terminal disposition, or pending persistence recovery. Token state with
+missing or inconsistent lifetime timestamps has no safe background refresh
+schedule; persistence recovery remains independent of token expiry metadata.
 
 Every successful refresh emits `oidcauth:token-refreshed`, including a refresh
-triggered synchronously by `AccessToken`.
+triggered synchronously by `AccessToken`. A later persistence retry emits no
+duplicate event.
 
 ## Platform Support
 

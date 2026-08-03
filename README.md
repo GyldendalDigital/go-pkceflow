@@ -138,6 +138,32 @@ later refresh requests.
 Use `WithHTTPClient` when discovery, JWKS, and token requests need a proxy,
 custom CA bundle, mutual TLS, or transport tuning.
 
+## Token Persistence Recovery
+
+A verified refresh remains successful for the running process even if
+`TokenPersistence.Save` reports an error. Rolling memory back is unsafe when a
+provider has rotated and invalidated the previous refresh token. The Client
+keeps the new generation authoritative, emits its auth event once, and marks
+that exact generation for persistence recovery.
+
+The same rule applies when Login commits successfully but its first Save fails.
+While `StartRefreshLoop` is active, Save is retried independently after 1, 2,
+4, and later seconds, capped at one minute. `StopRefreshLoop` pauses those
+retries without forgetting them. A newer Login, refresh, or Logout supersedes
+stale retry work under the same commit ordering used for normal persistence.
+
+Until a Save returns nil, a restart may load the previous state, the new state,
+or no readable state, depending on where the backend failed. A previous rotated
+refresh token may be rejected after restart; the configured grace period and
+the application's Login policy still apply, and the library never forces a
+browser login. Persistence errors are logged without backend error text so a
+custom store cannot accidentally expose token material.
+
+After Logout, `RestoreSession` cannot reload tokens into that same Client even
+if persistent deletion failed. A fresh process has no such in-memory tombstone,
+so applications should treat a logged deletion failure as uncertain restart
+durability while preserving Logout's existing best-effort return contract.
+
 ## Concurrent Login and Logout
 
 Lifecycle ordering is scoped to one `Client`. The latest admitted `Login` or
