@@ -35,7 +35,8 @@ Wrapper owns:
 - Wails v3 `AuthService` lifecycle glue.
 - Wails event bridge for core `oidcauth:*` events.
 - Frontend-safe DTOs and `AuthResult` values.
-- Deep-link delivery from Wails launch URL events into `mobileflow`.
+- Subscription and forwarding from Wails launch URL events into `mobileflow`;
+  native Android/iOS event production remains owned by Wails.
 
 ## Security and Protocol Rules
 
@@ -189,12 +190,22 @@ Useful docs in core:
 
 ## Current Backlog Priorities
 
-As of the July 29, 2026 handoff:
+As of the August 4, 2026 handoff:
 
-1. Reconcile or close stale done issues for wrapper M9 and real-IdP validation.
-2. Harden core coverage, especially filestore fallback/re-key/corruption paths
-   and refresh/grace edge cases.
-3. Add core OS matrix and `govulncheck`.
-4. Add Entra ID and generic OIDC setup docs.
-5. Validate mobile deep-link delivery on emulator/device.
-6. Dogfood with the Ordnett Pluss rewrite after library stability work.
+1. Dogfood the core and desktop wrapper in the Ordnett Pluss rewrite.
+2. Triage dogfooding findings without expanding the stabilized pre-1.0 core API
+   casually; the final compatibility freeze is at RC.
+3. Harden the public `oidctest` fixture before v1 in focused slices: strict
+   protocol binding/lifetimes, adversarial ID-token/JWKS coverage, request and
+   response scripting, then secondary endpoint/API cleanup. Do not add an
+   external fake-provider dependency without new evidence.
+4. Complete remaining live platform/provider checks needed for stable-release
+   confidence, including macOS and Windows logout.
+5. Before a stable wrapper release, make native OS checks feed required merge
+   contexts and decide whether the `Client()` binding-surface workaround needs
+   a pre-1.0 API change.
+6. Track wrapper issue #8 as Wails-specific mobile host validation. It does not
+   block core or desktop dogfooding and must not drive core changes. Do not
+   pursue upstream Wails implementation or pin an unreleased fork without an
+   explicit maintainer request.
+7. Prepare the pre-1.0 feedback and stable-release sequence after dogfooding.

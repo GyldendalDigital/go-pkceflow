@@ -69,7 +69,7 @@ Current status: **Pre-1.0 beta hardening**
 - [x] Docs: how-it-works (ELI5), Keycloak POC, Auth0, mobile deep linking
 
 ### M8.5: Core Completion ✓
-> Final core hardening and platform parity so the Wails wrapper builds against a frozen API.
+> Final core hardening and platform parity so the Wails wrapper builds against a stable pre-1.0 baseline.
 
 - [x] Always-on OIDC nonce (send + constant-time validate against ID token claim)
 - [x] Mobile logout parity (mobileflow implements LogoutFlowHandler)
@@ -82,7 +82,8 @@ Current status: **Pre-1.0 beta hardening**
 - [x] Initialize wails-pkceflow module
 - [x] Wails auth service adapter
 - [x] Wails event bridge
-- [x] Deep link router (mobile; real-device validation remains)
+- [x] Deep-link event adapter (mobile; Wails host validation is tracked
+  separately under wrapper issue #8)
 
 ### M10: Documentation and Release (in progress)
 > Examples, guides, and v1.0 release prep.
@@ -92,10 +93,10 @@ Current status: **Pre-1.0 beta hardening**
 - [x] Wails integration guide
 - [x] Example: CLI app
 - [x] Example: Wails desktop app with Dockerized Keycloak
-- [ ] Release v1.0.0
 - [ ] v1.0.0-beta.1 release
+- [ ] Release v1.0.0
 
-## Before Dogfooding
+## Desktop Dogfooding Baseline
 
 - [x] Complete coverage and edge-path hardening
   ([#43](https://github.com/GyldendalDigital/go-pkceflow/issues/43)).
@@ -110,8 +111,31 @@ Current status: **Pre-1.0 beta hardening**
 - [x] Make native OS matrix failures gate protected merges
   ([#64](https://github.com/GyldendalDigital/go-pkceflow/issues/64)).
 - [x] Reconcile the wrapper dependency pin and stale completed issues.
-- [ ] Validate mobile deep-link delivery on an emulator/device
+
+Core and the desktop wrapper are ready for dogfooding. Mobile applications can
+use `mobileflow` when their native layer or framework supplies launch URLs.
+
+## Before Stable Release
+
+- [ ] Complete desktop application dogfooding and triage resulting API or
+  lifecycle findings.
+- [ ] Harden the public `oidctest` fixture: strict native-client protocol
+  binding and lifetimes, adversarial ID-token/JWKS integration cases,
+  grant-scoped request/response scripting, and pre-v1 API cleanup.
+- [ ] Complete manual macOS auth-lifecycle and Windows logout validation.
+- [ ] Make wrapper native OS checks feed required merge-gating contexts.
+- [ ] Decide whether the wrapper's `Client()` binding-surface workaround needs
+  a pre-1.0 API change, then freeze compatibility at RC.
+
+## Wails Mobile Follow-up
+
+- [ ] Adopt an official Wails release that emits Android and iOS launch-URL
+  events, then validate warm active-flow completion and cold-launch event
+  receipt separately
   ([wrapper #8](https://github.com/GyldendalDigital/wails-pkceflow/issues/8)).
+  This verifies the Wails host-to-wrapper adapter, not core callback handling.
+  It does not imply recovery of a flow after process death and does not gate
+  core v1 or desktop dogfooding.
 
 ## Version Plan
 

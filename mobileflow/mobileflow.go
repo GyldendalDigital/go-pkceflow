@@ -1,10 +1,11 @@
 // Package mobileflow provides an AuthFlowHandler for mobile applications.
 // It opens the auth URL via an injected function and waits for the callback
-// URL to be delivered via DeliverURL (called from the app's deep link handler).
+// URL to be delivered via DeliverURL (called from a browser-session completion
+// or the app's OS lifecycle callback).
 //
 // This is a pure Go, framework-agnostic implementation. The platform-specific
-// wiring (subscribing to iOS Universal Links or Android App Links) is done
-// by the consumer or a wrapper like wails-pkceflow.
+// wiring is owned by the application and framework host. An adapter such as
+// wails-pkceflow may forward a URL after its host surfaces one.
 //
 // Usage:
 //
@@ -52,8 +53,8 @@ type flowWaiter struct {
 }
 
 // New creates a Handler with the given redirect URI and URL opener.
-// The redirectURI should be the claimed HTTPS URI registered with the IdP
-// (e.g., "https://myapp.example.com/auth/callback").
+// The redirectURI should be the exact claimed HTTPS URI (preferred) or
+// private-use custom-scheme URI registered with the IdP.
 // The openURL function is called to open the auth URL (e.g., via system browser).
 func New(redirectURI string, openURL func(string) error) *Handler {
 	return &Handler{
@@ -81,7 +82,7 @@ func (h *Handler) StartAuthFlow(ctx context.Context, authURL string) (string, er
 // DeliverURL delivers a callback URL to the active login or logout flow.
 // Malformed URLs, unrelated deep links, callbacks with the wrong state, and
 // deliveries made while no flow is active are silently dropped.
-// This should be called from the app's deep link handler when the IdP redirects back.
+// This should be called from the platform callback when the IdP redirects back.
 func (h *Handler) DeliverURL(callbackURL string) {
 	callback, err := parseCallbackURI(callbackURL)
 	if err != nil {

@@ -38,7 +38,9 @@ wails-pkceflow                      Wails v3 wrapper (depends on go-pkceflow)
 
 The library is built around a small set of focused interfaces:
 
-**AuthFlowHandler** -- Handles the platform-specific part of the OAuth flow (opening a browser, receiving the callback).
+**AuthFlowHandler** -- Handles the application-facing part of the OAuth flow
+(opening a browser and returning the callback). On mobile, the OS/framework
+bridge remains responsible for passing its launch URL to `mobileflow.DeliverURL`.
 - `StartAuthFlow(ctx, authURL) (callbackURL, error)` -- Opens auth URL, returns the callback URL with code+state
 - `RedirectURI() string` -- Returns the redirect URI registered with the IdP
 
@@ -211,15 +213,15 @@ Every successful refresh emits `oidcauth:token-refreshed`, including a refresh
 triggered synchronously by `AccessToken`. A later persistence retry emits no
 duplicate event.
 
-## Platform Support
+## Platform Integration Map
 
 | Platform | AuthFlowHandler | TokenPersistence | Notes |
 |----------|----------------|------------------|-------|
 | Linux | desktopflow (localhost + xdg-open) | filestore | Encrypted file in user config dir |
 | macOS | desktopflow (localhost + open) | filestore | Encrypted file in user config dir |
 | Windows | desktopflow (localhost + start) | filestore | Encrypted file in user config dir |
-| iOS | mobileflow (Universal Links) | filestore (app sandbox) | Consumer provides deep link wiring |
-| Android | mobileflow (App Links) | filestore (app sandbox) | Kernel UID isolation |
+| iOS | mobileflow (callback correlation) | filestore (app sandbox) | Application configures links/browser session; native host or completion handler delivers the URL |
+| Android | mobileflow (callback correlation) | filestore (app sandbox) | Application configures links; native host delivers the intent URL; sandbox uses kernel UID isolation |
 
 An OS-native credential store (keyring/Keychain) may be added later as an
 additional TokenPersistence implementation without changing the core API.
@@ -235,7 +237,9 @@ additional TokenPersistence implementation without changing the core API.
 - Localhost server binds loopback only (127.0.0.1, and [::1] for the localhost host), never a wildcard address
 - File-based token encryption: AES-256-GCM with random nonce per write
 - Key derivation: SHA-256(appID + machineID); fallback to persisted random key file
-- Redirect URIs: loopback IP literal per RFC 8252 (desktop), claimed HTTPS (mobile)
+- Redirect URIs: loopback on desktop; claimed HTTPS is preferred on mobile,
+  with registered private-use schemes supported at weaker interception
+  resistance
 - Refreshed ID tokens are verified and cannot silently change the session subject
 - Extra parameter maps cannot override library-owned OAuth/OIDC/PKCE fields or
   introduce a client secret
@@ -275,7 +279,7 @@ configuration or operational quirks. See the
 | Core has zero framework dependencies | Usable with any Go application, not just Wails |
 | Separate repos for core and wrapper | Independent versioning, clear dependency direction |
 | Interfaces over concrete types | Testability, platform flexibility |
-| No mobile AuthFlowHandler in library | Deep link setup is app-specific; library provides the channel-based handler, consumer wires the platform bridge |
+| No OS-specific deep-link bridge in core | `mobileflow.Handler` validates delivered callbacks; the application owns OS registration, the framework host owns native event production, and an adapter may forward surfaced URLs |
 | In-memory default; optional filestore | Minimal clients need no filesystem; persistent apps can inject the CGo-free encrypted store |
 | OS keyring deferred to a future backend | The TokenPersistence interface allows adding it later without breaking changes |
 | Random persistent key (not hostname) | Hostname changes don't invalidate tokens |
