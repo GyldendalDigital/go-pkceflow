@@ -3,7 +3,8 @@
 // It opens the auth URL via an injected function and waits for the callback
 // URL to be delivered via DeliverURL. This is a pure Go implementation with
 // no platform dependencies; the platform-specific wiring (iOS Universal Links,
-// Android App Links) is handled by the consumer or a wrapper like wails-pkceflow.
+// Android App Links) is handled by the consumer or framework host. An adapter
+// such as wails-pkceflow may forward URLs after the host surfaces them.
 //
 // Handler also implements pkceflow.LogoutFlowHandler for RP-Initiated Logout.
 // One login or logout browser flow may be active at a time. DeliverURL ignores
@@ -14,15 +15,19 @@
 // The post-logout redirect URI defaults to the login redirect URI; override it
 // with SetLogoutURI when the IdP registers a distinct post_logout_redirect_uri.
 //
-// The one-flow guard protects callback routing inside Handler. It does not
-// serialize higher-level client operations; applications should not invoke
-// Client.Login and Client.Logout concurrently.
+// The active waiter and its surrounding login or logout transaction exist only
+// in process memory. A callback delivered after process death has no active
+// flow and is ignored; the application must start the flow again.
+//
+// The one-flow guard protects direct Handler users. Client coordinates calls
+// into one handler under its documented lifecycle ordering; framework adapters
+// may enforce a stricter busy policy for user experience.
 //
 // Usage:
 //
 //	handler := mobileflow.New("https://myapp.example.com/auth/callback", openURL)
 //	client, _ := pkceflow.New(cfg, handler)
 //
-//	// In your deep link handler (platform-specific):
+//	// In your browser-session completion or OS lifecycle callback:
 //	handler.DeliverURL(callbackURL)
 package mobileflow

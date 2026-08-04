@@ -76,8 +76,11 @@ sequenceDiagram
 
 The two native-specific steps ("Deliver code + state" and how the browser is
 opened) are exactly the parts that differ between desktop and mobile. That is
-why go-pkceflow puts them behind a small interface (`AuthFlowHandler`) and ships
-a desktop implementation, while letting mobile apps provide their own.
+why go-pkceflow puts them behind a small interface (`AuthFlowHandler`).
+`desktopflow` opens the system browser and captures a loopback callback.
+`mobileflow` invokes a caller-provided URL opener and waits for a callback URL
+delivered by the application or framework host; it does not register links or
+receive OS lifecycle events.
 
 ## How the callback comes back
 
@@ -172,7 +175,8 @@ button press instead of preempting the first command.
 ## What this library solves
 
 - Public-client PKCE login and logout for desktop and mobile (no client secret).
-- Opening the system browser and capturing the callback on each platform.
+- Desktop browser launch and loopback callback capture, plus a mobile handler
+  for callbacks delivered by the application or framework host.
 - Encrypted, pluggable token storage.
 - Automatic background token refresh with an optional offline grace period.
 - RP-Initiated Logout with post-logout redirect correlation.
@@ -221,5 +225,5 @@ button press instead of preempting the first command.
 - Use a hosted IdP: [Auth0 guide](idp-setup-auth0.md).
 - Use Microsoft identity: [Entra ID guide](idp-setup-entra.md).
 - Check another provider: [generic OIDC guide](idp-setup-generic-oidc.md).
-- Ship on phones: [mobile deep linking](mobile-deep-linking.md).
+- Integrate a mobile host: [mobile deep linking](mobile-deep-linking.md).
 - Understand the internals: [architecture](architecture.md).

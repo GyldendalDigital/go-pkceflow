@@ -1,10 +1,10 @@
 # Mobile deep linking
 
 On desktop, go-pkceflow captures the login callback with a localhost web server.
-Phones do not allow that, so mobile apps receive the callback through a **deep
-link**: a URL that the operating system routes back into your app. This guide
-explains the two link types, how to register them, and how to wire the incoming
-URL into `mobileflow.Handler`.
+Mobile apps instead receive it from a platform browser session's completion
+handler or through a **deep link** that the operating system routes into the
+app. This guide explains both delivery models, the two link types, and how to
+wire the incoming URL into `mobileflow.Handler`.
 
 If you have not read the [how-it-works](how-it-works.md) overview, start there.
 
@@ -13,14 +13,14 @@ If you have not read the [how-it-works](how-it-works.md) overview, start there.
 ```mermaid
 sequenceDiagram
     participant App
-    participant OS
+    participant Platform as Browser session / OS
     participant Browser as External user-agent
     participant IdP
 
     App->>Browser: openURL(authURL)
     Browser->>IdP: User authenticates
-    IdP->>OS: Redirect to your deep link (code + state)
-    OS->>App: Deliver deep link URL
+    IdP->>Platform: Redirect to callback URL (code + state)
+    Platform->>App: Completion callback or launch URL
     App->>App: handler.DeliverURL(url)
     Note over App: StartAuthFlow returns the callback URL
 ```
@@ -28,14 +28,29 @@ sequenceDiagram
 `mobileflow.Handler` is deliberately platform-agnostic. You give it two things:
 
 - the **redirect URI** registered with the IdP, and
-- an **openURL** function that opens the auth URL in an external user-agent
-  (for example `ASWebAuthenticationSession` on iOS or a Chrome Custom Tab on
-  Android). Do not use an embedded WebView for login.
+- an **openURL** function that starts an external user-agent (for example
+  `ASWebAuthenticationSession` on iOS or a Chrome Custom Tab on Android). Do
+  not use an embedded WebView for login.
 
-When the OS hands your app a launch URL, call `handler.DeliverURL(url)`.
+When the platform returns the callback URL, call `handler.DeliverURL(url)`.
+For `ASWebAuthenticationSession`, do this from its completion handler. For an
+App Link, Universal Link, or custom scheme opened by the external browser, do
+it from the app's OS lifecycle callback.
 Malformed URLs and links that do not match the active flow's redirect URI and
 state are ignored, so an unrelated app link cannot unblock login. See
 [`mobileflow/mobileflow.go`](../mobileflow/mobileflow.go).
+
+This is the core library boundary: `mobileflow` invokes the supplied URL opener,
+waits for a callback, and validates a URL once it is delivered. Registering
+links with the OS and transporting the launch URL through a native bridge or
+application framework are consumer or adapter responsibilities. Core tests
+therefore prove callback handling, not a particular framework's Android or iOS
+host delivery.
+
+The active callback waiter and its surrounding login or logout transaction live
+only in process memory. If the app process dies, a later launch URL has no
+active flow and is ignored; start the flow again. Cold-launch URL delivery can
+prove host plumbing, but it does not prove OAuth transaction recovery.
 
 ```go
 handler := mobileflow.New("https://app.example.com/auth/callback", openURL)
@@ -83,8 +98,8 @@ IdP.
 
 ## Wiring the incoming URL into your app
 
-Whatever the platform, the pattern is the same: the OS gives you a URL, you pass
-it to `DeliverURL`.
+Whatever the platform, the pattern is the same: a browser-session completion or
+OS lifecycle callback gives you a URL, and you pass it to `DeliverURL`.
 
 It is safe to forward every launch URL from the platform integration. The
 handler accepts only the expected scheme, host, port, path, fixed redirect query
@@ -99,10 +114,14 @@ to release before starting the replacement; overlapping Logout calls coalesce.
 Framework-level busy guards remain useful for avoiding overlapping browser UX,
 but are not the correctness boundary.
 
-### iOS (SwiftUI, conceptually)
+### iOS (conceptually)
+
+When using `ASWebAuthenticationSession`, its completion handler receives the
+callback directly and should bridge it to `DeliverURL`. If the app instead
+receives an OS-routed Universal Link or custom-scheme URL, SwiftUI can forward
+that URL:
 
 ```swift
-// Universal Link
 .onOpenURL { url in
     bridge.deliverURL(url.absoluteString) // calls handler.DeliverURL on the Go side
 }
@@ -111,11 +130,21 @@ but are not the correctness boundary.
 ### Android (Kotlin, conceptually)
 
 ```kotlin
-override fun onNewIntent(intent: Intent) {
-    super.onNewIntent(intent)
-    intent.data?.let { uri ->
+private fun deliverCallback(intent: Intent?) {
+    intent?.data?.let { uri ->
         bridge.deliverURL(uri.toString()) // calls handler.DeliverURL on the Go side
     }
+}
+
+override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(savedInstanceState)
+    deliverCallback(intent) // cold launch
+}
+
+override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    deliverCallback(intent) // warm launch with singleTask/singleTop as configured
 }
 ```
 
@@ -143,7 +172,8 @@ correlation than an exact state match.
 - [ ] Add the platform entitlement / intent filter.
 - [ ] Register the redirect URI (and a post-logout URI) with the IdP.
 - [ ] Implement `openURL` using a secure in-app browser session.
-- [ ] Call `handler.DeliverURL(url)` from the OS deep link callback.
+- [ ] Call `handler.DeliverURL(url)` from the browser-session completion or OS
+      deep-link callback.
 
 ## See also
 

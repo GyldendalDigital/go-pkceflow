@@ -9,9 +9,12 @@ When working on go-pkceflow or wails-pkceflow code, follow these guidelines.
 ## Architecture
 
 - **Core (`go-pkceflow`)**: Framework-agnostic Go OIDC PKCE library. Zero Wails imports. Ships desktop, mobile flow handlers and platform token storage.
-- **Wrapper (`wails-pkceflow`)**: Thin Wails v3 adapter. Depends on core. Routes deep links to mobileflow, bridges events, provides ready-to-use service.
+- **Wrapper (`wails-pkceflow`)**: Thin Wails v3 adapter. Depends on core. Forwards Wails launch-URL events to mobileflow, bridges events, and provides a ready-to-use desktop service. Native Android/iOS event production is owned by Wails.
 - **Separate repos**: Independent versioning and release cycles.
-- **Developer writes zero platform auth code**: Install, configure, set up IdP/DNS/manifests, call Login().
+- **Platform boundary**: Desktop consumers use the included loopback handler.
+  Mobile consumers configure OS link registration and pass launch URLs to
+  `mobileflow.DeliverURL`, either directly or through a framework adapter.
+  Wails v3.0.0-beta.2 does not yet produce those mobile launch-URL events.
 
 ## Design Principles
 
@@ -30,9 +33,11 @@ When working on go-pkceflow or wails-pkceflow code, follow these guidelines.
 - Never log access tokens, refresh tokens, ID tokens, or authorization codes
 - Token storage: AES-256-GCM encrypted filestore with machine-ID derived key; fallback to persisted random key (not hostname)
 - Mobile: app sandbox provides isolation (same security model as browser cookies); filestore works without additional platform code
-- Desktop: encrypted file in user config dir with 0600 permissions
+- Desktop: encrypted file in the user config directory; verified `0600` mode
+  on POSIX and a caller-private inherited ACL on Windows
 - TokenPersistence interface enables test doubles and future alternative backends (e.g., OS keyring) without breaking changes
-- Localhost server: bind 127.0.0.1 only (never 0.0.0.0)
+- Localhost server: bind loopback only (`127.0.0.1`, plus `[::1]` when the
+  configured host is `localhost`), never a wildcard address
 
 ## Testing
 
@@ -47,15 +52,14 @@ When working on go-pkceflow or wails-pkceflow code, follow these guidelines.
 - RFC 8252 (OAuth 2.0 for Native Applications)
 - RFC 7636 (Proof Key for Code Exchange)
 - OpenID Connect Core 1.0
-- RP-Initiated Logout (draft-ietf-connect-rpinitiated)
+- OpenID Connect RP-Initiated Logout 1.0
 
 ## IdP Compatibility
 
 Support these IdPs (test with FakeIDPServer, document quirks):
-- Keycloak (primary, production-tested in Ordnett Pluss)
+- Keycloak (primary; manually smoke-tested on Linux and Windows, with
+  application dogfooding pending)
 - Microsoft Entra ID (needs ExtraAuthParams for prompt, audience)
 - Auth0 (needs audience param)
 - Okta (standard)
 - Google (needs access_type=offline instead of offline_access scope)
-
-
