@@ -246,7 +246,11 @@ func TestRotatedRefreshSaveFailureRecoversCurrentGeneration(t *testing.T) {
 		t.Fatalf("persisted state = %+v, want previous generation", persisted)
 	}
 
-	if !client.RestoreSession() {
+	restoredDirty, err := client.RestoreSession()
+	if err != nil {
+		t.Fatalf("RestoreSession dirty state: %v", err)
+	}
+	if !restoredDirty {
 		t.Fatal("RestoreSession rejected the authoritative dirty in-memory state")
 	}
 	client.mu.Lock()
@@ -302,7 +306,11 @@ func TestRotatedRefreshSaveFailureRecoversCurrentGeneration(t *testing.T) {
 		emitter: noopEmitter{},
 		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
-	if !fresh.RestoreSession() {
+	restoredFresh, err := fresh.RestoreSession()
+	if err != nil {
+		t.Fatalf("fresh RestoreSession: %v", err)
+	}
+	if !restoredFresh {
 		t.Fatal("fresh Client could not restore recovered state")
 	}
 	fresh.mu.Lock()
@@ -869,7 +877,7 @@ func (s *secretErrorPersistenceStore) Delete() error {
 	return s.err
 }
 
-func TestPersistenceLoadAndDeleteLogsAreRedacted(t *testing.T) {
+func TestPersistenceErrorsAreRedacted(t *testing.T) {
 	secrets := []string{"secret-access", "secret-refresh", "secret-id"}
 	var logs bytes.Buffer
 	store := &secretErrorPersistenceStore{err: errors.New(strings.Join(secrets, " "))}
@@ -885,16 +893,197 @@ func TestPersistenceLoadAndDeleteLogsAreRedacted(t *testing.T) {
 		stateRevision: 1,
 	}
 
-	if client.RestoreSession() {
+	restored, restoreErr := client.RestoreSession()
+	if restoreErr == nil {
+		t.Fatal("RestoreSession did not return the Load error")
+	}
+	if restored {
 		t.Fatal("RestoreSession succeeded despite Load error")
+	}
+	if !errors.Is(restoreErr, store.err) {
+		t.Fatalf("RestoreSession error = %v, want wrapped persistence error", restoreErr)
 	}
 	if err := client.Logout(context.Background()); err != nil {
 		t.Fatalf("Logout: %v", err)
 	}
 	for _, secret := range secrets {
+		if strings.Contains(restoreErr.Error(), secret) {
+			t.Fatalf("RestoreSession error exposed %q: %v", secret, restoreErr)
+		}
 		if strings.Contains(logs.String(), secret) {
 			t.Fatalf("persistence logs exposed %q: %s", secret, logs.String())
 		}
+	}
+}
+
+type typedRestoreFailure struct {
+	detail string
+}
+
+func (e *typedRestoreFailure) Error() string {
+	return e.detail
+}
+
+type restoreResultStore struct {
+	state TokenState
+	err   error
+}
+
+func (s *restoreResultStore) Save(state TokenState) error { //nolint:gocritic // hugeParam: interface requires value parameter
+	s.state = state
+	return nil
+}
+
+func (s *restoreResultStore) Load() (TokenState, error) {
+	return s.state, s.err
+}
+
+func (s *restoreResultStore) Delete() error {
+	s.state = TokenState{}
+	return nil
+}
+
+func TestRestoreSessionLoadErrorPreservesStateAndCause(t *testing.T) {
+	existing := TokenState{
+		AccessToken:  "current-access",
+		RefreshToken: "current-refresh",
+		IDToken:      "current-id",
+		ExpiresAt:    time.Date(2026, time.August, 6, 14, 0, 0, 0, time.UTC),
+		LastAuthAt:   time.Date(2026, time.August, 6, 13, 0, 0, 0, time.UTC),
+	}
+	loaded := TokenState{
+		AccessToken:  "untrusted-access",
+		RefreshToken: "untrusted-refresh",
+		IDToken:      "untrusted-id",
+	}
+	cause := &typedRestoreFailure{detail: "backend detail with untrusted-access"}
+	client := &Client{
+		store:         &restoreResultStore{state: loaded, err: cause},
+		emitter:       noopEmitter{},
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		state:         existing,
+		stateRevision: 17,
+	}
+
+	restored, err := client.RestoreSession()
+	if err == nil {
+		t.Fatal("RestoreSession returned nil error for backend failure")
+	}
+	if restored {
+		t.Fatal("RestoreSession restored state returned with an error")
+	}
+	if err == cause {
+		t.Fatal("RestoreSession returned the unredacted backend error directly")
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("errors.Is(%v, cause) = false", err)
+	}
+	var typed *typedRestoreFailure
+	if !errors.As(err, &typed) || typed != cause {
+		t.Fatalf("errors.As(%v) = %v, want original cause", err, typed)
+	}
+	if strings.Contains(err.Error(), cause.detail) {
+		t.Fatalf("RestoreSession error exposed backend detail: %v", err)
+	}
+
+	client.mu.Lock()
+	state := client.state
+	revision := client.stateRevision
+	client.mu.Unlock()
+	if state != existing || revision != 17 {
+		t.Fatalf("RestoreSession error changed state=%+v revision=%d", state, revision)
+	}
+}
+
+type blockingRestoreStore struct {
+	mu      sync.Mutex
+	state   TokenState
+	err     error
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingRestoreStore) Save(state TokenState) error { //nolint:gocritic // hugeParam: interface requires value parameter
+	s.mu.Lock()
+	s.state = state
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *blockingRestoreStore) Load() (TokenState, error) {
+	s.once.Do(func() { close(s.entered) })
+	<-s.release
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state, s.err
+}
+
+func (s *blockingRestoreStore) Delete() error {
+	s.mu.Lock()
+	s.state = TokenState{}
+	s.mu.Unlock()
+	return nil
+}
+
+func TestRestoreSessionSerializesLoadErrorAgainstLogout(t *testing.T) {
+	cause := errors.New("load unavailable")
+	store := &blockingRestoreStore{
+		state: TokenState{
+			AccessToken:  "stored-access",
+			RefreshToken: "stored-refresh",
+		},
+		err:     cause,
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	client := &Client{
+		store:   store,
+		emitter: noopEmitter{},
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+		state: TokenState{
+			AccessToken:  "current-access",
+			RefreshToken: "current-refresh",
+		},
+		stateRevision: 1,
+	}
+
+	type restoreOutcome struct {
+		restored bool
+		err      error
+	}
+	restoreDone := make(chan restoreOutcome, 1)
+	go func() {
+		restored, err := client.RestoreSession()
+		restoreDone <- restoreOutcome{restored: restored, err: err}
+	}()
+	waitForTestSignal(t, store.entered, "RestoreSession did not enter Load")
+
+	logoutDone := make(chan error, 1)
+	go func() {
+		logoutDone <- client.Logout(context.Background())
+	}()
+	select {
+	case err := <-logoutDone:
+		t.Fatalf("Logout completed before RestoreSession released Load: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(store.release)
+	result := <-restoreDone
+	if result.restored || !errors.Is(result.err, cause) {
+		t.Fatalf("RestoreSession result = %+v, want false and wrapped cause", result)
+	}
+	if err := waitForTestError(t, logoutDone, "Logout did not finish after Load returned"); err != nil {
+		t.Fatalf("Logout: %v", err)
+	}
+
+	client.mu.Lock()
+	state := client.state
+	blocked := client.restoreBlocked
+	client.mu.Unlock()
+	if !state.IsZero() || !blocked {
+		t.Fatalf("final state=%+v restoreBlocked=%v, want logged out", state, blocked)
 	}
 }
 
@@ -937,7 +1126,11 @@ func TestFailedLogoutDeleteBlocksSameClientRestore(t *testing.T) {
 	if persisted != state {
 		t.Fatalf("failed Delete changed persisted state: %+v", persisted)
 	}
-	if client.RestoreSession() {
+	restored, err := client.RestoreSession()
+	if err != nil {
+		t.Fatalf("RestoreSession after Logout: %v", err)
+	}
+	if restored {
 		t.Fatal("same Client restored state after local Logout")
 	}
 	client.mu.Lock()
@@ -985,7 +1178,11 @@ func TestPreRecoveryRestartOutcomesAreExplicit(t *testing.T) {
 				emitter: noopEmitter{},
 				logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 			}
-			if got := fresh.RestoreSession(); got != tt.wantFound {
+			got, err := fresh.RestoreSession()
+			if err != nil {
+				t.Fatalf("RestoreSession: %v", err)
+			}
+			if got != tt.wantFound {
 				t.Fatalf("RestoreSession = %v, want %v", got, tt.wantFound)
 			}
 			fresh.mu.Lock()

@@ -36,6 +36,20 @@ var (
 	errRefreshPermanentlyBlocked = errors.New("pkceflow: token generation is permanently blocked")
 )
 
+// restoreSessionError keeps arbitrary persistence error text out of logs while
+// preserving the original cause for deliberate errors.Is/errors.As inspection.
+type restoreSessionError struct {
+	cause error
+}
+
+func (e *restoreSessionError) Error() string {
+	return "pkceflow: failed to restore persisted session"
+}
+
+func (e *restoreSessionError) Unwrap() error {
+	return e.cause
+}
+
 // AuthError represents an OAuth2/OIDC error returned by the identity provider.
 // The Code field contains the OAuth2 error code (e.g., "invalid_grant").
 type AuthError struct {

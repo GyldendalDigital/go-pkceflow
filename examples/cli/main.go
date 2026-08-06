@@ -122,7 +122,12 @@ func main() {
 	ctx := context.Background()
 
 	// Restore previous session
-	if client.RestoreSession() {
+	restored, err := client.RestoreSession()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error restoring session: %v\n", err)
+		os.Exit(1)
+	}
+	if restored {
 		fmt.Println("Restored previous session.")
 	}
 

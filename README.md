@@ -68,7 +68,9 @@ func main() {
         log.Fatal(err)
     }
 
-    client.RestoreSession()
+    if _, err := client.RestoreSession(); err != nil {
+        log.Fatal(err)
+    }
     if err := client.Init(ctx); err != nil {
         if !client.AuthStatus().CanUseApp {
             log.Fatal(err)
@@ -144,6 +146,13 @@ custom CA bundle, mutual TLS, or transport tuning.
 
 ## Token Persistence Recovery
 
+`RestoreSession` returns whether it installed a non-zero persisted state and an
+error when the persistence backend could not be accessed. Missing or malformed
+stored content is a normal logged-out result (`false, nil`). A restore error
+does not change existing in-memory state, and its safe public message unwraps to
+the backend cause for deliberate `errors.Is` or `errors.As` inspection. Token
+validity and grace eligibility remain the responsibility of `AuthStatus`.
+
 A verified refresh remains successful for the running process even if
 `TokenPersistence.Save` reports an error. Rolling memory back is unsafe when a
 provider has rotated and invalidated the previous refresh token. The Client
@@ -160,7 +169,7 @@ Until a Save returns nil, a restart may load the previous state, the new state,
 or no readable state, depending on where the backend failed. A previous rotated
 refresh token may be rejected after restart; the configured grace period and
 the application's Login policy still apply, and the library never forces a
-browser login. Persistence errors are logged without backend error text so a
+browser login. Save-recovery errors are logged without backend error text so a
 custom store cannot accidentally expose token material.
 
 After Logout, `RestoreSession` cannot reload tokens into that same Client even

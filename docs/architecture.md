@@ -55,6 +55,12 @@ When a handler does not implement this interface, `Logout` falls back to `StartA
 - `Load() (TokenState, error)`
 - `Delete() error`
 
+`Load` distinguishes absent or successfully retrieved malformed content (zero
+state, nil) from operational storage failures (zero state, error).
+`Client.RestoreSession` preserves that error boundary as `(restored, error)`;
+an error never replaces the current in-memory generation. `restored` describes
+non-zero state restoration, while `AuthStatus` decides validity and grace.
+
 **EventEmitter** -- Notifies the application of auth state changes.
 - `Emit(event string, data any)`
 
