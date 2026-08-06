@@ -83,15 +83,16 @@ func (s *Store) Save(state pkceflow.TokenState) error {
 	return nil
 }
 
-// Load retrieves persisted token state. Returns zero TokenState (not error)
-// if no state exists or the stored data is corrupted/unreadable.
+// Load retrieves persisted token state. Missing or successfully read but
+// corrupt content returns zero TokenState. Filesystem access failures are
+// returned to the caller.
 func (s *Store) Load() (pkceflow.TokenState, error) {
 	ciphertext, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return pkceflow.TokenState{}, nil
 		}
-		return pkceflow.TokenState{}, nil
+		return pkceflow.TokenState{}, fmt.Errorf("filestore: read %q: %w", s.path, err)
 	}
 
 	plaintext, err := decrypt(s.key[:], ciphertext)

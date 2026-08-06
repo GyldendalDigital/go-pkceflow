@@ -408,7 +408,7 @@ func TestCryptoHelpersRejectInvalidInputs(t *testing.T) {
 	}
 }
 
-func TestLoadTreatsNonFilePathAsMissingState(t *testing.T) {
+func TestLoadReturnsNonFilePathError(t *testing.T) {
 	dir := t.TempDir()
 	store := &Store{dir: dir, key: filledKey(0x19), path: filepath.Join(dir, tokenFileName)}
 	if err := os.Mkdir(store.path, dirPerm); err != nil {
@@ -416,11 +416,15 @@ func TestLoadTreatsNonFilePathAsMissingState(t *testing.T) {
 	}
 
 	got, err := store.Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
+	if err == nil {
+		t.Fatal("Load accepted a directory at the token path")
 	}
 	if !got.IsZero() {
-		t.Fatalf("Load non-file path = %+v, want zero state", got)
+		t.Fatalf("Load state after filesystem error = %+v, want zero state", got)
+	}
+	var pathErr *os.PathError
+	if !errors.As(err, &pathErr) {
+		t.Fatalf("Load error = %T %v, want wrapped *os.PathError", err, err)
 	}
 }
 

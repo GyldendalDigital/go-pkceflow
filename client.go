@@ -189,48 +189,53 @@ func (c *Client) AuthStatus() AuthStatusResult {
 	}
 }
 
-// RestoreSession loads persisted tokens into memory.
-// Returns true if a usable session was found.
+// RestoreSession loads persisted tokens into memory. restored is true when a
+// non-zero persisted state was installed or an authoritative non-zero in-memory
+// generation was retained. It does not report whether that state is currently
+// valid or within grace; use AuthStatus for that decision.
 // Does NOT require network (works before Init).
+//
+// Missing or malformed persisted state returns false, nil. An operational Load
+// failure returns false and a safely redacted error that unwraps to the backend
+// cause. A Load error never changes the current in-memory state.
 //
 // A locally logged-out Client does not restore again; create a new Client for a
 // new application lifetime. If the current in-memory generation has unresolved
 // persistence, it remains authoritative and RestoreSession does not replace it
 // with an uncertain older stored generation.
-func (c *Client) RestoreSession() bool {
+func (c *Client) RestoreSession() (restored bool, err error) {
 	c.stateCommitMu.Lock()
 	c.mu.Lock()
 	if c.restoreBlocked {
 		c.mu.Unlock()
 		c.stateCommitMu.Unlock()
-		return false
+		return false, nil
 	}
 	if c.persistenceRetry.valid &&
 		c.persistenceRetry.revision == c.stateRevision {
-		restored := !c.state.IsZero()
+		restored = !c.state.IsZero()
 		c.mu.Unlock()
 		c.stateCommitMu.Unlock()
-		return restored
+		return restored, nil
 	}
 	c.mu.Unlock()
 
 	state, err := c.store.Load()
 	if err != nil {
 		c.stateCommitMu.Unlock()
-		c.logger.Warn("failed to load persisted session")
-		return false
+		return false, &restoreSessionError{cause: err}
 	}
 
 	if state.IsZero() {
 		c.stateCommitMu.Unlock()
-		return false
+		return false, nil
 	}
 
 	c.mu.Lock()
 	c.setStateLocked(&state)
 	c.mu.Unlock()
 	c.stateCommitMu.Unlock()
-	return true
+	return true, nil
 }
 
 // setStateLocked replaces the in-memory token state when it materially changes.

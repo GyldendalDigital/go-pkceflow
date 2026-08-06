@@ -20,7 +20,9 @@
 //	    return err
 //	}
 //
-//	client.RestoreSession()
+//	if _, err := client.RestoreSession(); err != nil {
+//	    return err
+//	}
 //	if err := client.Init(ctx); err != nil && !client.AuthStatus().CanUseApp {
 //	    return err
 //	}

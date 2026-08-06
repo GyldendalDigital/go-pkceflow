@@ -60,7 +60,8 @@ type LogoutFlowHandler interface {
 //
 // Methods must complete synchronously and must not continue mutating storage
 // after they return. They must not synchronously call back into Client methods
-// that can mutate or refresh token state.
+// that can mutate or refresh token state. Errors must not contain token values
+// or serialized token state.
 type TokenPersistence interface {
 	// Save atomically replaces the complete persisted token state. It must be
 	// idempotent: Client may retry the same state after an error.
@@ -70,8 +71,12 @@ type TokenPersistence interface {
 	// later Load must return that state unless a newer Save or Delete completed.
 	Save(state TokenState) error
 
-	// Load retrieves persisted token state. Returns zero TokenState (not error)
-	// if no state exists or the stored data is corrupted/unreadable.
+	// Load retrieves persisted token state. It returns zero TokenState and nil if
+	// no state exists. Implementations that own a serialized representation also
+	// return zero and nil when that representation was retrieved successfully but
+	// is malformed or corrupt. Failures to access storage or retrieve its content,
+	// including permission, I/O, and native secure-storage failures, return an
+	// error. Client ignores any state returned together with an error.
 	Load() (TokenState, error)
 
 	// Delete removes persisted token state. Called on logout and must be

@@ -133,7 +133,11 @@ func TestInit_Idempotent(t *testing.T) {
 func TestRestoreSession_Empty(t *testing.T) {
 	client, _, _, _ := newTestClient(t)
 
-	if client.RestoreSession() {
+	restored, err := client.RestoreSession()
+	if err != nil {
+		t.Fatalf("RestoreSession: %v", err)
+	}
+	if restored {
 		t.Error("RestoreSession should return false on empty store")
 	}
 }
@@ -153,7 +157,11 @@ func TestRestoreSession_WithTokens(t *testing.T) {
 		t.Fatalf("store.Save: %v", err)
 	}
 
-	if !client.RestoreSession() {
+	restored, err := client.RestoreSession()
+	if err != nil {
+		t.Fatalf("RestoreSession: %v", err)
+	}
+	if !restored {
 		t.Error("RestoreSession should return true with tokens in store")
 	}
 
@@ -493,7 +501,9 @@ func TestAuthStatus_GracePeriod(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store.Save: %v", err)
 	}
-	client.RestoreSession()
+	if _, err := client.RestoreSession(); err != nil {
+		t.Fatalf("RestoreSession: %v", err)
+	}
 
 	status := client.AuthStatus()
 	if status.Valid {
@@ -531,7 +541,9 @@ func TestAuthStatus_GraceDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store.Save: %v", err)
 	}
-	client.RestoreSession()
+	if _, err := client.RestoreSession(); err != nil {
+		t.Fatalf("RestoreSession: %v", err)
+	}
 
 	status := client.AuthStatus()
 	if status.GraceMode {
@@ -759,7 +771,11 @@ func TestRefresh_RejectsCurrentIDTokenWithoutSubject(t *testing.T) {
 	if err := store.Save(before); err != nil {
 		t.Fatalf("save modified state: %v", err)
 	}
-	if !client.RestoreSession() {
+	restored, err := client.RestoreSession()
+	if err != nil {
+		t.Fatalf("RestoreSession: %v", err)
+	}
+	if !restored {
 		t.Fatal("RestoreSession failed after modifying stored ID token")
 	}
 	emitter.Reset()
