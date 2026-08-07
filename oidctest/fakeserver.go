@@ -48,6 +48,8 @@ type FakeIDPServer struct {
 	mu              sync.Mutex
 	key             *rsa.PrivateKey
 	signer          jose.Signer
+	keyID           string     // current signing key ID
+	extraKeys       []keyEntry // additional keys exposed in JWKS
 	clientID        string
 	redirectURIs    []string
 	scopes          []string // allowed scopes; empty means accept any
@@ -65,7 +67,18 @@ type FakeIDPServer struct {
 	refreshSubject  *string                 // when set, overrides refresh ID token subject
 	refreshRawID    *string                 // when set, refresh responses use this raw id_token
 	lenient         bool                    // when true, disables strict protocol checks
+	jwksError       *int                    // when set, JWKS endpoint returns this HTTP status code
+	forceIssuer     *string                 // when set, overrides the issuer in ID tokens
+	forceAudience   *string                 // when set, overrides the audience in ID tokens
+	forceExpiry     *time.Time              // when set, overrides the expiry in ID tokens
+	forceNotBefore  *time.Time              // when set, overrides nbf in ID tokens
 	nowFunc         func() time.Time
+}
+
+// keyEntry is an additional RSA key exposed via the JWKS endpoint.
+type keyEntry struct {
+	key   *rsa.PrivateKey
+	keyID string
 }
 
 type pendingCode struct {
@@ -195,6 +208,7 @@ func NewFakeIDP(t *testing.T, opts ...Option) *FakeIDPServer {
 	s := &FakeIDPServer{
 		key:           key,
 		signer:        signer,
+		keyID:         "test-key-1",
 		clientID:      "test-client",
 		redirectURIs:  []string{"http://127.0.0.1:0/callback"},
 		accessTTL:     5 * time.Minute,
@@ -281,6 +295,111 @@ func (s *FakeIDPServer) SetAccessTTL(d time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.accessTTL = d
+}
+
+// RotateKey generates a new signing key with the given kid and makes it the
+// active signer. The old key remains in the JWKS response so existing tokens
+// can still be verified. This simulates IdP key rotation.
+func (s *FakeIDPServer) RotateKey(t *testing.T, newKeyID string) {
+	t.Helper()
+
+	if newKeyID == "" {
+		t.Fatal("oidctest: RotateKey requires a non-empty kid")
+	}
+
+	newKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("oidctest: generate rotated key: %v", err)
+	}
+
+	signingKey := jose.SigningKey{Algorithm: jose.RS256, Key: newKey}
+	newSigner, err := jose.NewSigner(signingKey, (&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", newKeyID))
+	if err != nil {
+		t.Fatalf("oidctest: create rotated signer: %v", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Reject duplicate kid.
+	if s.keyID == newKeyID {
+		t.Fatalf("oidctest: RotateKey kid %q is already the active key", newKeyID)
+	}
+	for _, ek := range s.extraKeys {
+		if ek.keyID == newKeyID {
+			t.Fatalf("oidctest: RotateKey kid %q already exists in JWKS", newKeyID)
+		}
+	}
+
+	// Move the current key to extraKeys so it stays in JWKS.
+	s.extraKeys = append(s.extraKeys, keyEntry{key: s.key, keyID: s.keyID})
+	s.key = newKey
+	s.signer = newSigner
+	s.keyID = newKeyID
+}
+
+// SetJWKSError makes the JWKS endpoint return the given HTTP status code on
+// every request until ClearJWKSError is called. Use this to simulate JWKS
+// endpoint unavailability.
+func (s *FakeIDPServer) SetJWKSError(statusCode int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.jwksError = &statusCode
+}
+
+// ClearJWKSError removes any forced JWKS endpoint error.
+func (s *FakeIDPServer) ClearJWKSError() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.jwksError = nil
+}
+
+// SetForceIssuer overrides the issuer claim in subsequently issued ID tokens.
+// Pass empty string to revert to the default (server URL).
+func (s *FakeIDPServer) SetForceIssuer(issuer string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if issuer == "" {
+		s.forceIssuer = nil
+	} else {
+		s.forceIssuer = &issuer
+	}
+}
+
+// SetForceAudience overrides the audience claim in subsequently issued ID tokens.
+// Pass empty string to revert to the default (client ID).
+func (s *FakeIDPServer) SetForceAudience(aud string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if aud == "" {
+		s.forceAudience = nil
+	} else {
+		s.forceAudience = &aud
+	}
+}
+
+// SetForceExpiry overrides the exp claim in subsequently issued ID tokens.
+// Pass zero time to revert to the default (now + idTokenTTL).
+func (s *FakeIDPServer) SetForceExpiry(t time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if t.IsZero() {
+		s.forceExpiry = nil
+	} else {
+		s.forceExpiry = &t
+	}
+}
+
+// SetForceNotBefore overrides the nbf claim in subsequently issued ID tokens.
+// Pass zero time to revert to the default (now - 1 minute).
+func (s *FakeIDPServer) SetForceNotBefore(t time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if t.IsZero() {
+		s.forceNotBefore = nil
+	} else {
+		s.forceNotBefore = &t
+	}
 }
 
 func (s *FakeIDPServer) now() time.Time {
@@ -615,16 +734,35 @@ func stateSubject(state *tokenState) string {
 
 // handleJWKS serves the JSON Web Key Set.
 func (s *FakeIDPServer) handleJWKS(w http.ResponseWriter, _ *http.Request) {
-	jwks := jose.JSONWebKeySet{
-		Keys: []jose.JSONWebKey{
-			{
-				Key:       &s.key.PublicKey,
-				KeyID:     "test-key-1",
-				Algorithm: string(jose.RS256),
-				Use:       "sig",
-			},
+	s.mu.Lock()
+	jwksErr := s.jwksError
+	s.mu.Unlock()
+
+	if jwksErr != nil {
+		http.Error(w, "simulated JWKS failure", *jwksErr)
+		return
+	}
+
+	s.mu.Lock()
+	keys := []jose.JSONWebKey{
+		{
+			Key:       &s.key.PublicKey,
+			KeyID:     s.keyID,
+			Algorithm: string(jose.RS256),
+			Use:       "sig",
 		},
 	}
+	for _, ek := range s.extraKeys {
+		keys = append(keys, jose.JSONWebKey{
+			Key:       &ek.key.PublicKey,
+			KeyID:     ek.keyID,
+			Algorithm: string(jose.RS256),
+			Use:       "sig",
+		})
+	}
+	s.mu.Unlock()
+
+	jwks := jose.JSONWebKeySet{Keys: keys}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(jwks) //nolint:errcheck // response write failure surfaces as client-side error in test
 }
@@ -663,13 +801,32 @@ func (s *FakeIDPServer) handleUserinfo(w http.ResponseWriter, _ *http.Request) {
 
 // signIDToken creates a signed JWT ID token.
 func (s *FakeIDPServer) signIDToken(subject, audience, nonce string, now time.Time, ttl time.Duration) (string, error) {
+	s.mu.Lock()
+	issuer := s.Server.URL
+	if s.forceIssuer != nil {
+		issuer = *s.forceIssuer
+	}
+	if s.forceAudience != nil {
+		audience = *s.forceAudience
+	}
+	expiry := now.Add(ttl)
+	if s.forceExpiry != nil {
+		expiry = *s.forceExpiry
+	}
+	notBefore := now.Add(-1 * time.Minute)
+	if s.forceNotBefore != nil {
+		notBefore = *s.forceNotBefore
+	}
+	signer := s.signer // capture under lock to avoid race with RotateKey
+	s.mu.Unlock()
+
 	claims := jwt.Claims{
-		Issuer:    s.Server.URL,
+		Issuer:    issuer,
 		Subject:   subject,
 		Audience:  jwt.Audience{audience},
 		IssuedAt:  jwt.NewNumericDate(now),
-		Expiry:    jwt.NewNumericDate(now.Add(ttl)),
-		NotBefore: jwt.NewNumericDate(now.Add(-1 * time.Minute)), // 1min clock skew tolerance
+		Expiry:    jwt.NewNumericDate(expiry),
+		NotBefore: jwt.NewNumericDate(notBefore),
 	}
 
 	type extraClaims struct {
@@ -683,7 +840,7 @@ func (s *FakeIDPServer) signIDToken(subject, audience, nonce string, now time.Ti
 		Name:  "Test User",
 	}
 
-	token, err := jwt.Signed(s.signer).Claims(claims).Claims(extra).Serialize()
+	token, err := jwt.Signed(signer).Claims(claims).Claims(extra).Serialize()
 	if err != nil {
 		return "", fmt.Errorf("sign ID token: %w", err)
 	}

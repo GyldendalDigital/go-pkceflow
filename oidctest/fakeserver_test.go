@@ -654,3 +654,255 @@ func authorizeRequest(t *testing.T, idp *FakeIDPServer, params url.Values) *url.
 
 	return u
 }
+
+func TestFakeIDP_RotateKey(t *testing.T) {
+	ctx := context.Background()
+	idp := NewFakeIDP(t, WithClientID("my-app"))
+
+	provider, err := oidc.NewProvider(ctx, idp.IssuerURL())
+	if err != nil {
+		t.Fatalf("discovery: %v", err)
+	}
+	verifierCfg := &oidc.Config{ClientID: "my-app"}
+
+	// Issue a token with the original key.
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := computeS256Challenge(verifier)
+	authResp := authorizeRequest(t, idp, url.Values{
+		"client_id":             {"my-app"},
+		"redirect_uri":          {"http://127.0.0.1:0/callback"},
+		"response_type":         {"code"},
+		"state":                 {"s"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+		"nonce":                 {"n1"},
+	})
+	code := authResp.Query().Get("code")
+	tokens := exchangeCode(t, idp, code, verifier, "my-app")
+
+	// Verify the original token succeeds.
+	_, err = provider.Verifier(verifierCfg).Verify(ctx, tokens.IDToken)
+	if err != nil {
+		t.Fatalf("verify original token: %v", err)
+	}
+
+	// Rotate the key.
+	idp.RotateKey(t, "test-key-2")
+
+	// The old token should still verify (old key in JWKS).
+	// Need a fresh provider to re-fetch JWKS.
+	provider2, err := oidc.NewProvider(ctx, idp.IssuerURL())
+	if err != nil {
+		t.Fatalf("discovery after rotation: %v", err)
+	}
+	_, err = provider2.Verifier(verifierCfg).Verify(ctx, tokens.IDToken)
+	if err != nil {
+		t.Fatalf("verify old token after rotation: %v", err)
+	}
+
+	// Issue a new token with the rotated key; it should also verify.
+	authResp2 := authorizeRequest(t, idp, url.Values{
+		"client_id":             {"my-app"},
+		"redirect_uri":          {"http://127.0.0.1:0/callback"},
+		"response_type":         {"code"},
+		"state":                 {"s2"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+		"nonce":                 {"n2"},
+	})
+	code2 := authResp2.Query().Get("code")
+	tokens2 := exchangeCode(t, idp, code2, verifier, "my-app")
+
+	_, err = provider2.Verifier(verifierCfg).Verify(ctx, tokens2.IDToken)
+	if err != nil {
+		t.Fatalf("verify new token after rotation: %v", err)
+	}
+}
+
+func TestFakeIDP_JWKSError(t *testing.T) {
+	idp := NewFakeIDP(t)
+	idp.SetJWKSError(http.StatusServiceUnavailable)
+
+	resp, err := http.Get(idp.IssuerURL() + "/jwks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", resp.StatusCode)
+	}
+
+	// Clearing restores normal behavior.
+	idp.ClearJWKSError()
+	resp2, err := http.Get(idp.IssuerURL() + "/jwks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 after clearing, got %d", resp2.StatusCode)
+	}
+}
+
+func TestFakeIDP_ForceIssuer(t *testing.T) {
+	ctx := context.Background()
+	idp := NewFakeIDP(t, WithClientID("my-app"))
+	idp.SetForceIssuer("https://evil.example.com")
+
+	provider, err := oidc.NewProvider(ctx, idp.IssuerURL())
+	if err != nil {
+		t.Fatalf("discovery: %v", err)
+	}
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := computeS256Challenge(verifier)
+	authResp := authorizeRequest(t, idp, url.Values{
+		"client_id":             {"my-app"},
+		"redirect_uri":          {"http://127.0.0.1:0/callback"},
+		"response_type":         {"code"},
+		"state":                 {"s"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+		"nonce":                 {"n"},
+	})
+	code := authResp.Query().Get("code")
+	tokens := exchangeCode(t, idp, code, verifier, "my-app")
+
+	// Verification should fail because the issuer doesn't match.
+	verifierCfg := &oidc.Config{ClientID: "my-app"}
+	_, err = provider.Verifier(verifierCfg).Verify(ctx, tokens.IDToken)
+	if err == nil {
+		t.Fatal("expected verification to fail with wrong issuer")
+	}
+}
+
+func TestFakeIDP_ForceAudience(t *testing.T) {
+	ctx := context.Background()
+	idp := NewFakeIDP(t, WithClientID("my-app"))
+	idp.SetForceAudience("wrong-client")
+
+	provider, err := oidc.NewProvider(ctx, idp.IssuerURL())
+	if err != nil {
+		t.Fatalf("discovery: %v", err)
+	}
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := computeS256Challenge(verifier)
+	authResp := authorizeRequest(t, idp, url.Values{
+		"client_id":             {"my-app"},
+		"redirect_uri":          {"http://127.0.0.1:0/callback"},
+		"response_type":         {"code"},
+		"state":                 {"s"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+		"nonce":                 {"n"},
+	})
+	code := authResp.Query().Get("code")
+	tokens := exchangeCode(t, idp, code, verifier, "my-app")
+
+	// Verification should fail because the audience doesn't match.
+	verifierCfg := &oidc.Config{ClientID: "my-app"}
+	_, err = provider.Verifier(verifierCfg).Verify(ctx, tokens.IDToken)
+	if err == nil {
+		t.Fatal("expected verification to fail with wrong audience")
+	}
+}
+
+func TestFakeIDP_ForceExpiry_Expired(t *testing.T) {
+	ctx := context.Background()
+	idp := NewFakeIDP(t, WithClientID("my-app"))
+	// Force expiry in the past.
+	idp.SetForceExpiry(time.Now().Add(-1 * time.Hour))
+
+	provider, err := oidc.NewProvider(ctx, idp.IssuerURL())
+	if err != nil {
+		t.Fatalf("discovery: %v", err)
+	}
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := computeS256Challenge(verifier)
+	authResp := authorizeRequest(t, idp, url.Values{
+		"client_id":             {"my-app"},
+		"redirect_uri":          {"http://127.0.0.1:0/callback"},
+		"response_type":         {"code"},
+		"state":                 {"s"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+		"nonce":                 {"n"},
+	})
+	code := authResp.Query().Get("code")
+	tokens := exchangeCode(t, idp, code, verifier, "my-app")
+
+	// Verification should fail because the token is expired.
+	verifierCfg := &oidc.Config{ClientID: "my-app"}
+	_, err = provider.Verifier(verifierCfg).Verify(ctx, tokens.IDToken)
+	if err == nil {
+		t.Fatal("expected verification to fail with expired token")
+	}
+}
+
+func TestFakeIDP_ForceNotBefore_Future(t *testing.T) {
+	ctx := context.Background()
+	idp := NewFakeIDP(t, WithClientID("my-app"))
+	// Force nbf far in the future.
+	idp.SetForceNotBefore(time.Now().Add(1 * time.Hour))
+
+	provider, err := oidc.NewProvider(ctx, idp.IssuerURL())
+	if err != nil {
+		t.Fatalf("discovery: %v", err)
+	}
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := computeS256Challenge(verifier)
+	authResp := authorizeRequest(t, idp, url.Values{
+		"client_id":             {"my-app"},
+		"redirect_uri":          {"http://127.0.0.1:0/callback"},
+		"response_type":         {"code"},
+		"state":                 {"s"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+		"nonce":                 {"n"},
+	})
+	code := authResp.Query().Get("code")
+	tokens := exchangeCode(t, idp, code, verifier, "my-app")
+
+	// Verification should fail because the token is not yet valid.
+	verifierCfg := &oidc.Config{ClientID: "my-app"}
+	_, err = provider.Verifier(verifierCfg).Verify(ctx, tokens.IDToken)
+	if err == nil {
+		t.Fatal("expected verification to fail with future nbf")
+	}
+}
+
+// exchangeCode is a test helper that performs code exchange and returns token fields.
+func exchangeCode(t *testing.T, idp *FakeIDPServer, code, verifier, clientID string) struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	IDToken      string `json:"id_token"`
+} {
+	t.Helper()
+	resp, err := http.PostForm(idp.IssuerURL()+"/token", url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {"http://127.0.0.1:0/callback"},
+		"client_id":     {clientID},
+		"code_verifier": {verifier},
+	})
+	if err != nil {
+		t.Fatalf("token exchange: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("token exchange failed (%d): %s", resp.StatusCode, body)
+	}
+	var tokens struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		IDToken      string `json:"id_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&tokens); err != nil {
+		t.Fatalf("decode tokens: %v", err)
+	}
+	return tokens
+}
