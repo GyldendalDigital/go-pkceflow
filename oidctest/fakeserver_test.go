@@ -484,7 +484,7 @@ func TestFakeIDP_StrictMode_CodeExpiry(t *testing.T) {
 	var errResp struct {
 		Error string `json:"error"`
 	}
-	json.NewDecoder(resp.Body).Decode(&errResp) //nolint:errcheck
+	json.NewDecoder(resp.Body).Decode(&errResp) //nolint:errcheck // test assertion follows
 	if errResp.Error != "invalid_grant" {
 		t.Errorf("error = %q, want invalid_grant", errResp.Error)
 	}

@@ -40,11 +40,11 @@ type FakeIDPServer struct {
 	signer          jose.Signer
 	clientID        string
 	redirectURIs    []string
-	scopes          []string      // allowed scopes; empty means accept any
+	scopes          []string // allowed scopes; empty means accept any
 	accessTTL       time.Duration
 	refreshTTL      time.Duration
 	idTokenTTL      time.Duration
-	codeTTL         time.Duration // authorization code lifetime
+	codeTTL         time.Duration           // authorization code lifetime
 	codes           map[string]*pendingCode // authorization code -> pending exchange
 	refreshTokens   map[string]*tokenState  // refresh token -> associated state
 	errorQueue      []string                // queued errors to return on next token request
