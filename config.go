@@ -8,8 +8,14 @@ import (
 	"time"
 )
 
-// DefaultScopes are the OIDC scopes requested if Config.Scopes is empty.
-var DefaultScopes = []string{"openid", "profile", "email", "offline_access"}
+// defaultScopes are the OIDC scopes requested if Config.Scopes is empty.
+var defaultScopes = []string{"openid", "profile", "email", "offline_access"}
+
+// DefaultScopes returns the default OIDC scopes requested when Config.Scopes
+// is empty. Returns a fresh copy on each call, safe to mutate.
+func DefaultScopes() []string {
+	return append([]string(nil), defaultScopes...)
+}
 
 // Config holds the OIDC client configuration.
 // RedirectURI is not included here; it is owned by the AuthFlowHandler.
@@ -96,7 +102,7 @@ func (c *Config) Validate() error {
 	}
 
 	if len(c.Scopes) == 0 {
-		c.Scopes = append([]string(nil), DefaultScopes...)
+		c.Scopes = append([]string(nil), defaultScopes...)
 	} else {
 		c.Scopes = append([]string(nil), c.Scopes...)
 	}

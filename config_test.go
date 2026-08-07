@@ -71,12 +71,13 @@ func TestConfig_Validate_Defaults(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(cfg.Scopes) != len(DefaultScopes) {
-		t.Errorf("Scopes = %v, want %v", cfg.Scopes, DefaultScopes)
+	defaults := DefaultScopes()
+	if len(cfg.Scopes) != len(defaults) {
+		t.Errorf("Scopes = %v, want %v", cfg.Scopes, defaults)
 	}
 	for i, s := range cfg.Scopes {
-		if s != DefaultScopes[i] {
-			t.Errorf("Scopes[%d] = %q, want %q", i, s, DefaultScopes[i])
+		if s != defaults[i] {
+			t.Errorf("Scopes[%d] = %q, want %q", i, s, defaults[i])
 		}
 	}
 
@@ -301,10 +302,15 @@ func TestConfig_Validate_DefaultScopesCopied(t *testing.T) {
 	}
 	_ = cfg.Validate()
 
-	// Mutating the config's scopes should not affect DefaultScopes
+	// Mutating the config's scopes should not affect DefaultScopes().
+	before := DefaultScopes()
 	cfg.Scopes[0] = "mutated"
-	if DefaultScopes[0] == "mutated" {
-		t.Error("Config.Validate did not copy DefaultScopes (shares backing array)")
+	after := DefaultScopes()
+	if after[0] == "mutated" {
+		t.Error("Config.Validate did not copy defaultScopes (shares backing array)")
+	}
+	if before[0] != after[0] {
+		t.Error("DefaultScopes() returned inconsistent results")
 	}
 }
 
