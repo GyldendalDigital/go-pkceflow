@@ -2,6 +2,7 @@ package oidctest
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -118,6 +119,77 @@ func TestRecordingEmitter_Concurrent(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func TestRecordingEmitter_WaitForEvent(t *testing.T) {
+	emitter := &RecordingEmitter{}
+
+	// Event already emitted: should return immediately.
+	emitter.Emit("existing", nil)
+	if !emitter.WaitForEvent("existing", 100*time.Millisecond) {
+		t.Error("WaitForEvent should find already-emitted event")
+	}
+
+	// Event emitted asynchronously: should wait and find it.
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		emitter.Emit("async-event", "data")
+	}()
+	if !emitter.WaitForEvent("async-event", 2*time.Second) {
+		t.Error("WaitForEvent should find async event")
+	}
+
+	// Timeout when event is never emitted.
+	if emitter.WaitForEvent("never", 50*time.Millisecond) {
+		t.Error("WaitForEvent should timeout for missing event")
+	}
+}
+
+func TestFailingStore(t *testing.T) {
+	store := &FailingStore{}
+
+	// Works normally when no errors are set.
+	saved := pkceflow.TokenState{AccessToken: "token1"}
+	if err := store.Save(saved); err != nil {
+		t.Fatalf("Save without error: %v", err)
+	}
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load without error: %v", err)
+	}
+	if loaded.AccessToken != "token1" {
+		t.Errorf("Load returned wrong token: %q", loaded.AccessToken)
+	}
+
+	// Inject errors.
+	testErr := fmt.Errorf("simulated failure")
+	store.SaveErr = testErr
+	if err := store.Save(pkceflow.TokenState{}); err != testErr {
+		t.Errorf("Save error = %v, want simulated failure", err)
+	}
+
+	store.LoadErr = testErr
+	_, err = store.Load()
+	if err != testErr {
+		t.Errorf("Load error = %v, want simulated failure", err)
+	}
+
+	store.DeleteErr = testErr
+	if err := store.Delete(); err != testErr {
+		t.Errorf("Delete error = %v, want simulated failure", err)
+	}
+
+	// Clear errors and verify normal operation resumes.
+	store.SaveErr = nil
+	store.LoadErr = nil
+	store.DeleteErr = nil
+	if err := store.Delete(); err != nil {
+		t.Fatalf("Delete after clearing error: %v", err)
+	}
+	loaded, _ = store.Load()
+	if !loaded.IsZero() {
+		t.Error("Load after delete should return zero state")
+	}
 }
 
 func TestFakeFlowHandler_CompletesFlow(t *testing.T) {
