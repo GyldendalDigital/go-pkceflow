@@ -841,6 +841,39 @@ func TestFakeIDP_ForceExpiry_Expired(t *testing.T) {
 	}
 }
 
+func TestFakeIDP_ForceNotBefore_Future(t *testing.T) {
+	ctx := context.Background()
+	idp := NewFakeIDP(t, WithClientID("my-app"))
+	// Force nbf far in the future.
+	idp.SetForceNotBefore(time.Now().Add(1 * time.Hour))
+
+	provider, err := oidc.NewProvider(ctx, idp.IssuerURL())
+	if err != nil {
+		t.Fatalf("discovery: %v", err)
+	}
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := computeS256Challenge(verifier)
+	authResp := authorizeRequest(t, idp, url.Values{
+		"client_id":             {"my-app"},
+		"redirect_uri":          {"http://127.0.0.1:0/callback"},
+		"response_type":         {"code"},
+		"state":                 {"s"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+		"nonce":                 {"n"},
+	})
+	code := authResp.Query().Get("code")
+	tokens := exchangeCode(t, idp, code, verifier, "my-app")
+
+	// Verification should fail because the token is not yet valid.
+	verifierCfg := &oidc.Config{ClientID: "my-app"}
+	_, err = provider.Verifier(verifierCfg).Verify(ctx, tokens.IDToken)
+	if err == nil {
+		t.Fatal("expected verification to fail with future nbf")
+	}
+}
+
 // exchangeCode is a test helper that performs code exchange and returns token fields.
 func exchangeCode(t *testing.T, idp *FakeIDPServer, code, verifier, clientID string) struct {
 	AccessToken  string `json:"access_token"`

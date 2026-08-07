@@ -303,6 +303,10 @@ func (s *FakeIDPServer) SetAccessTTL(d time.Duration) {
 func (s *FakeIDPServer) RotateKey(t *testing.T, newKeyID string) {
 	t.Helper()
 
+	if newKeyID == "" {
+		t.Fatal("oidctest: RotateKey requires a non-empty kid")
+	}
+
 	newKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("oidctest: generate rotated key: %v", err)
@@ -316,6 +320,17 @@ func (s *FakeIDPServer) RotateKey(t *testing.T, newKeyID string) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Reject duplicate kid.
+	if s.keyID == newKeyID {
+		t.Fatalf("oidctest: RotateKey kid %q is already the active key", newKeyID)
+	}
+	for _, ek := range s.extraKeys {
+		if ek.keyID == newKeyID {
+			t.Fatalf("oidctest: RotateKey kid %q already exists in JWKS", newKeyID)
+		}
+	}
+
 	// Move the current key to extraKeys so it stays in JWKS.
 	s.extraKeys = append(s.extraKeys, keyEntry{key: s.key, keyID: s.keyID})
 	s.key = newKey
@@ -802,6 +817,7 @@ func (s *FakeIDPServer) signIDToken(subject, audience, nonce string, now time.Ti
 	if s.forceNotBefore != nil {
 		notBefore = *s.forceNotBefore
 	}
+	signer := s.signer // capture under lock to avoid race with RotateKey
 	s.mu.Unlock()
 
 	claims := jwt.Claims{
@@ -824,7 +840,7 @@ func (s *FakeIDPServer) signIDToken(subject, audience, nonce string, now time.Ti
 		Name:  "Test User",
 	}
 
-	token, err := jwt.Signed(s.signer).Claims(claims).Claims(extra).Serialize()
+	token, err := jwt.Signed(signer).Claims(claims).Claims(extra).Serialize()
 	if err != nil {
 		return "", fmt.Errorf("sign ID token: %w", err)
 	}
