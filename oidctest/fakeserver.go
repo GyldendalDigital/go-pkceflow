@@ -149,7 +149,7 @@ func WithRejectBasicAuth() Option {
 // the authorization request cause an invalid_scope error redirect. An empty
 // list (the default) accepts any scope.
 func WithAllowedScopes(scopes ...string) Option {
-	return func(s *FakeIDPServer) { s.scopes = scopes }
+	return func(s *FakeIDPServer) { s.scopes = append([]string(nil), scopes...) }
 }
 
 // WithCodeTTL sets the authorization code lifetime. Default: 30 seconds.
@@ -358,8 +358,16 @@ func (s *FakeIDPServer) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 	}
 	s.mu.Unlock()
 
-	location := fmt.Sprintf("%s?code=%s&state=%s", redirectURI, code, state)
-	http.Redirect(w, r, location, http.StatusFound) //nolint:gosec // G710: intentional redirect in test OIDC server
+	redirectURL, err := url.Parse(redirectURI)
+	if err != nil {
+		http.Error(w, "invalid redirect_uri", http.StatusBadRequest)
+		return
+	}
+	q := redirectURL.Query()
+	q.Set("code", code)
+	q.Set("state", state)
+	redirectURL.RawQuery = q.Encode()
+	http.Redirect(w, r, redirectURL.String(), http.StatusFound) //nolint:gosec // G710: intentional redirect in test OIDC server
 }
 
 // handleToken handles token exchange (authorization_code) and refresh (refresh_token).
@@ -668,8 +676,17 @@ func tokenError(w http.ResponseWriter, code, description string) {
 }
 
 func redirectWithError(w http.ResponseWriter, r *http.Request, redirectURI, state, code, description string) {
-	location := fmt.Sprintf("%s?error=%s&error_description=%s&state=%s", redirectURI, code, url.QueryEscape(description), state)
-	http.Redirect(w, r, location, http.StatusFound) //nolint:gosec // G710: intentional redirect in test OIDC server
+	redirectURL, err := url.Parse(redirectURI)
+	if err != nil {
+		http.Error(w, "invalid redirect_uri", http.StatusBadRequest)
+		return
+	}
+	q := redirectURL.Query()
+	q.Set("error", code)
+	q.Set("error_description", description)
+	q.Set("state", state)
+	redirectURL.RawQuery = q.Encode()
+	http.Redirect(w, r, redirectURL.String(), http.StatusFound) //nolint:gosec // G710: intentional redirect in test OIDC server
 }
 
 // isRegisteredRedirectURI checks whether the given URI matches a registered one.
