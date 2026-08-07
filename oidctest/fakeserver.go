@@ -48,8 +48,8 @@ type FakeIDPServer struct {
 	mu              sync.Mutex
 	key             *rsa.PrivateKey
 	signer          jose.Signer
-	keyID           string                  // current signing key ID
-	extraKeys       []keyEntry              // additional keys exposed in JWKS
+	keyID           string     // current signing key ID
+	extraKeys       []keyEntry // additional keys exposed in JWKS
 	clientID        string
 	redirectURIs    []string
 	scopes          []string // allowed scopes; empty means accept any
