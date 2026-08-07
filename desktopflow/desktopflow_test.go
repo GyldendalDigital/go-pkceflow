@@ -443,10 +443,14 @@ func TestHandler_PageFor_LogoutWithSeparatePath(t *testing.T) {
 func TestHandler_PageFor_LogoutSamePathFallsBackToSuccess(t *testing.T) {
 	h := New(19500)
 	// When login and logout share the same path (no SetLogoutPath called),
-	// the page should show the login success message.
+	// LogoutHTML should be ignored and the success page shown.
+	h.LogoutHTML = "<html><body>Should Not Appear</body></html>"
 	got := h.pageFor("/callback", false)
 	if !contains(got, "Authentication Successful") {
-		t.Errorf("same-path logout should show 'Authentication Successful', got %q", got)
+		t.Errorf("same-path should show 'Authentication Successful', got %q", got)
+	}
+	if contains(got, "Should Not Appear") {
+		t.Error("LogoutHTML should be ignored when logoutPath == path")
 	}
 }
 

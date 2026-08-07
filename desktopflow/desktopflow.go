@@ -380,8 +380,14 @@ func (b *broker) handle(w http.ResponseWriter, r *http.Request) {
 	b.mu.Unlock()
 
 	isError := ok && r.URL.Query().Get("error") != ""
+	// Only use the actual path for page selection on matched callbacks.
+	// Unmatched requests always get the success page to remain indistinguishable.
+	pagePath := ""
+	if ok {
+		pagePath = r.URL.Path
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, b.pageFor(r.URL.Path, isError)) //nolint:errcheck // response write failure surfaces as client-side error
+	fmt.Fprint(w, b.pageFor(pagePath, isError)) //nolint:errcheck // response write failure surfaces as client-side error
 
 	if ok {
 		ch <- callbackResult{rawQuery: r.URL.RawQuery}
