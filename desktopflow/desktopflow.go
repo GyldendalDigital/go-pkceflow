@@ -60,6 +60,10 @@ type Handler struct {
 	// ErrorHTML is the HTML page shown when the IdP returns an error.
 	// If empty, a default error page is shown.
 	ErrorHTML string
+
+	// LogoutHTML is the HTML page shown after successful logout.
+	// If empty, a default logout page is shown.
+	LogoutHTML string
 }
 
 // New creates a Handler with redirect URI http://127.0.0.1:{port}/callback.
@@ -216,12 +220,19 @@ func (h *Handler) runFlow(ctx context.Context, targetURL, path, redirectURI stri
 }
 
 // pageFor returns the HTML page to render for a callback response.
-func (h *Handler) pageFor(isError bool) string {
+// It uses the request path to distinguish login from logout callbacks.
+func (h *Handler) pageFor(path string, isError bool) string {
 	if isError {
 		if h.ErrorHTML != "" {
 			return h.ErrorHTML
 		}
 		return defaultErrorHTML
+	}
+	if path == h.logoutPath && h.logoutPath != h.path {
+		if h.LogoutHTML != "" {
+			return h.LogoutHTML
+		}
+		return defaultLogoutHTML
 	}
 	if h.SuccessHTML != "" {
 		return h.SuccessHTML
@@ -239,7 +250,7 @@ type callbackResult struct {
 // registration and shut down a grace period after the last one clears.
 type broker struct {
 	addrs   []string
-	pageFor func(isError bool) string
+	pageFor func(path string, isError bool) string
 	grace   time.Duration
 
 	mu         sync.Mutex
@@ -249,7 +260,7 @@ type broker struct {
 	graceTimer *time.Timer
 }
 
-func newBroker(addrs []string, pageFor func(isError bool) string) *broker {
+func newBroker(addrs []string, pageFor func(path string, isError bool) string) *broker {
 	return &broker{
 		addrs:   addrs,
 		pageFor: pageFor,
@@ -369,8 +380,14 @@ func (b *broker) handle(w http.ResponseWriter, r *http.Request) {
 	b.mu.Unlock()
 
 	isError := ok && r.URL.Query().Get("error") != ""
+	// Only use the actual path for page selection on matched callbacks.
+	// Unmatched requests always get the success page to remain indistinguishable.
+	pagePath := ""
+	if ok {
+		pagePath = r.URL.Path
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, b.pageFor(isError)) //nolint:errcheck // response write failure surfaces as client-side error
+	fmt.Fprint(w, b.pageFor(pagePath, isError)) //nolint:errcheck // response write failure surfaces as client-side error
 
 	if ok {
 		ch <- callbackResult{rawQuery: r.URL.RawQuery}
@@ -421,6 +438,10 @@ func isLoopback(host string) bool {
 const defaultSuccessHTML = `<!DOCTYPE html>
 <html><head><title>Authentication Successful</title></head>
 <body><h1>Authentication Successful</h1><p>You can close this window.</p></body></html>`
+
+const defaultLogoutHTML = `<!DOCTYPE html>
+<html><head><title>Logged Out</title></head>
+<body><h1>Logged Out</h1><p>You have been logged out. You can close this window.</p></body></html>`
 
 const defaultErrorHTML = `<!DOCTYPE html>
 <html><head><title>Authentication Error</title></head>

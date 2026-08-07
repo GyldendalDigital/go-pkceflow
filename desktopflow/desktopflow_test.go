@@ -415,3 +415,67 @@ func contains(s, substr string) bool {
 	}
 	return false
 }
+
+func TestHandler_PageFor_LoginSuccess(t *testing.T) {
+	h := New(19500)
+	got := h.pageFor("/callback", false)
+	if !contains(got, "Authentication Successful") {
+		t.Errorf("login success page should contain 'Authentication Successful', got %q", got)
+	}
+}
+
+func TestHandler_PageFor_LogoutWithSeparatePath(t *testing.T) {
+	h := New(19500)
+	if err := h.SetLogoutPath("/logout-callback"); err != nil {
+		t.Fatal(err)
+	}
+	got := h.pageFor("/logout-callback", false)
+	if !contains(got, "Logged Out") {
+		t.Errorf("logout page should contain 'Logged Out', got %q", got)
+	}
+	// Login path should still show authentication success.
+	loginPage := h.pageFor("/callback", false)
+	if !contains(loginPage, "Authentication Successful") {
+		t.Errorf("login path should still show 'Authentication Successful', got %q", loginPage)
+	}
+}
+
+func TestHandler_PageFor_LogoutSamePathFallsBackToSuccess(t *testing.T) {
+	h := New(19500)
+	// When login and logout share the same path (no SetLogoutPath called),
+	// LogoutHTML should be ignored and the success page shown.
+	h.LogoutHTML = "<html><body>Should Not Appear</body></html>"
+	got := h.pageFor("/callback", false)
+	if !contains(got, "Authentication Successful") {
+		t.Errorf("same-path should show 'Authentication Successful', got %q", got)
+	}
+	if contains(got, "Should Not Appear") {
+		t.Error("LogoutHTML should be ignored when logoutPath == path")
+	}
+}
+
+func TestHandler_PageFor_CustomLogoutHTML(t *testing.T) {
+	h := New(19500)
+	if err := h.SetLogoutPath("/logout-callback"); err != nil {
+		t.Fatal(err)
+	}
+	h.LogoutHTML = "<html><body>Custom Logout</body></html>"
+	got := h.pageFor("/logout-callback", false)
+	if got != h.LogoutHTML {
+		t.Errorf("expected custom LogoutHTML, got %q", got)
+	}
+}
+
+func TestHandler_PageFor_Error(t *testing.T) {
+	h := New(19500)
+	if err := h.SetLogoutPath("/logout-callback"); err != nil {
+		t.Fatal(err)
+	}
+	// Errors on either path should show the error page.
+	for _, path := range []string{"/callback", "/logout-callback"} {
+		got := h.pageFor(path, true)
+		if !contains(got, "Authentication Error") {
+			t.Errorf("error page on %s should contain 'Authentication Error', got %q", path, got)
+		}
+	}
+}
