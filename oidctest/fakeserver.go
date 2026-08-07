@@ -25,6 +25,16 @@ type FakeIDPServer struct {
 	// Server is the underlying httptest.Server. Use IssuerURL() instead of accessing directly.
 	Server *httptest.Server
 
+	// Hooks provides per-endpoint hooks that run before the default handler.
+	// If a hook writes a response, the default handler is skipped.
+	Hooks Hooks
+
+	// Recorder captures all requests made to the server for assertion.
+	Recorder RequestRecorder
+
+	// GrantErrors holds per-grant-type error injection for the token endpoint.
+	GrantErrors GrantTypeErrorMap
+
 	mu              sync.Mutex
 	key             *rsa.PrivateKey
 	signer          jose.Signer
@@ -166,12 +176,12 @@ func NewFakeIDP(t *testing.T, opts ...Option) *FakeIDPServer {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /.well-known/openid-configuration", s.handleDiscovery)
-	mux.HandleFunc("GET /authorize", s.handleAuthorize)
-	mux.HandleFunc("POST /token", s.handleToken)
-	mux.HandleFunc("GET /jwks", s.handleJWKS)
-	mux.HandleFunc("GET /end_session", s.handleEndSession)
-	mux.HandleFunc("GET /userinfo", s.handleUserinfo)
+	mux.HandleFunc("GET /.well-known/openid-configuration", s.wrapHandler("/discovery", s.Hooks.runDiscovery, s.handleDiscovery))
+	mux.HandleFunc("GET /authorize", s.wrapHandler("/authorize", s.Hooks.runAuthorize, s.handleAuthorize))
+	mux.HandleFunc("POST /token", s.wrapHandler("/token", s.Hooks.runToken, s.handleToken))
+	mux.HandleFunc("GET /jwks", s.wrapHandler("/jwks", s.Hooks.runJWKS, s.handleJWKS))
+	mux.HandleFunc("GET /end_session", s.wrapHandler("/end_session", s.Hooks.runEndSession, s.handleEndSession))
+	mux.HandleFunc("GET /userinfo", s.wrapHandler("/userinfo", s.Hooks.runUserinfo, s.handleUserinfo))
 
 	s.Server = httptest.NewServer(mux)
 	t.Cleanup(s.Server.Close)
@@ -182,6 +192,27 @@ func NewFakeIDP(t *testing.T, opts ...Option) *FakeIDPServer {
 // IssuerURL returns the base URL of the fake IdP (used for OIDC discovery).
 func (s *FakeIDPServer) IssuerURL() string {
 	return s.Server.URL
+}
+
+// wrapHandler returns an http.HandlerFunc that records the request, runs the
+// hook (if set), and then calls the default handler.
+func (s *FakeIDPServer) wrapHandler(endpoint string, hookFn func(http.ResponseWriter, *http.Request) bool, defaultHandler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Record the request.
+		params := r.URL.Query()
+		if r.Method == http.MethodPost {
+			_ = r.ParseForm()
+			params = r.PostForm
+		}
+		s.Recorder.record(endpoint, r.Method, params)
+
+		// Run hook; if it handled the response, skip the default handler.
+		if hookFn(w, r) {
+			return
+		}
+
+		defaultHandler(w, r)
+	}
 }
 
 // QueueError queues an OAuth error code to be returned on the next token request.
@@ -328,6 +359,13 @@ func (s *FakeIDPServer) handleToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	grantType := r.FormValue("grant_type")
+
+	// Check per-grant-type errors.
+	if errCode, ok := s.GrantErrors.check(grantType); ok {
+		tokenError(w, errCode, "simulated grant-scoped error")
+		return
+	}
+
 	switch grantType {
 	case "authorization_code":
 		s.handleAuthCodeExchange(w, r)
