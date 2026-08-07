@@ -15,7 +15,7 @@ func TestHooks_TokenHook(t *testing.T) {
 	idp.Hooks.SetTokenHook(func(w http.ResponseWriter, _ *http.Request) bool {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusTooManyRequests)
-		json.NewEncoder(w).Encode(map[string]string{"error": "rate_limited"}) //nolint:errcheck
+		json.NewEncoder(w).Encode(map[string]string{"error": "rate_limited"}) //nolint:errcheck // test response write
 		return true
 	})
 
@@ -58,7 +58,7 @@ func TestHooks_AuthorizeHook(t *testing.T) {
 		redirectURI := r.URL.Query().Get("redirect_uri")
 		state := r.URL.Query().Get("state")
 		location := fmt.Sprintf("%s?error=login_required&state=%s", redirectURI, state)
-		http.Redirect(w, r, location, http.StatusFound) //nolint:gosec
+		http.Redirect(w, r, location, http.StatusFound) //nolint:gosec // intentional redirect in test
 		return true
 	})
 
@@ -126,7 +126,11 @@ func TestRequestRecorder(t *testing.T) {
 		"code_challenge_method": {"S256"},
 	}.Encode())
 
-	_, _ = http.Get(idp.IssuerURL() + "/jwks")
+	resp, err := http.Get(idp.IssuerURL() + "/jwks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
 
 	// Check recorder.
 	records := idp.Recorder.Records()
@@ -195,7 +199,7 @@ func TestGrantTypeErrorMap(t *testing.T) {
 	var tokens struct {
 		RefreshToken string `json:"refresh_token"`
 	}
-	json.NewDecoder(resp.Body).Decode(&tokens) //nolint:errcheck
+	json.NewDecoder(resp.Body).Decode(&tokens) //nolint:errcheck // test assertion follows
 
 	resp2, err := http.PostForm(idp.IssuerURL()+"/token", url.Values{
 		"grant_type":    {"refresh_token"},
@@ -213,7 +217,7 @@ func TestGrantTypeErrorMap(t *testing.T) {
 	var errResp struct {
 		Error string `json:"error"`
 	}
-	json.NewDecoder(resp2.Body).Decode(&errResp) //nolint:errcheck
+	json.NewDecoder(resp2.Body).Decode(&errResp) //nolint:errcheck // test assertion follows
 	if errResp.Error != "invalid_grant" {
 		t.Errorf("error = %q, want invalid_grant", errResp.Error)
 	}
@@ -229,15 +233,9 @@ func TestGrantTypeErrorMap(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp3.Body.Close()
-	// Should now succeed (or fail for other reasons, but not the grant error).
-	if resp3.StatusCode == http.StatusBadRequest {
-		var e struct{ Error string `json:"error"` }
-		json.NewDecoder(resp3.Body).Decode(&e) //nolint:errcheck
-		if e.Error == "invalid_grant" {
-			// Could be legitimate invalid_grant from rotation; check description.
-			// After clearing, the token endpoint runs normally. The refresh token
-			// was consumed by the grant error check (which returns before consuming),
-			// so it should still be valid.
-		}
-	}
+	// After clearing the grant error, the refresh token should be usable.
+	// It may still fail with invalid_grant if the token was already consumed
+	// by rotation during the error-injected request, but the grant-scoped
+	// error itself is no longer in effect.
+	_ = resp3.StatusCode
 }
