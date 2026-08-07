@@ -348,12 +348,18 @@ func (c *Client) Init(ctx context.Context) error {
 		},
 	}
 
-	// Extract end_session_endpoint from discovery claims (for RP-Initiated Logout)
+	// Extract end_session_endpoint from discovery claims (for RP-Initiated Logout).
+	// If claims parsing fails, preserve the previously committed endpoint rather
+	// than accidentally clearing it — discovery otherwise succeeded.
 	var claims struct {
 		EndSessionEndpoint string `json:"end_session_endpoint"`
 	}
 	if err := provider.Claims(&claims); err == nil {
 		snapshot.endSessionEndpoint = claims.EndSessionEndpoint
+	} else {
+		c.mu.Lock()
+		snapshot.endSessionEndpoint = c.endSessionEndpoint
+		c.mu.Unlock()
 	}
 
 	return c.wrapInitError(c.commitInit(operation, snapshot))
