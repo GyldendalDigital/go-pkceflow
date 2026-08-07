@@ -64,7 +64,8 @@ func (e *RecordingEmitter) Reset() {
 // timeout expires. Returns true if the event was observed, false on timeout.
 // This avoids polling in asynchronous test scenarios.
 func (e *RecordingEmitter) WaitForEvent(name string, timeout time.Duration) bool {
-	deadline := time.After(timeout)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	for {
 		e.mu.Lock()
 		for _, ev := range e.events {
@@ -83,7 +84,7 @@ func (e *RecordingEmitter) WaitForEvent(name string, timeout time.Duration) bool
 		select {
 		case <-ch:
 			// New event emitted; re-check.
-		case <-deadline:
+		case <-timer.C:
 			return false
 		}
 	}

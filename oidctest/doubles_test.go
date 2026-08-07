@@ -163,26 +163,26 @@ func TestFailingStore(t *testing.T) {
 
 	// Inject errors.
 	testErr := fmt.Errorf("simulated failure")
-	store.SaveErr = testErr
+	store.SetSaveErr(testErr)
 	if err := store.Save(pkceflow.TokenState{}); err != testErr {
 		t.Errorf("Save error = %v, want simulated failure", err)
 	}
 
-	store.LoadErr = testErr
+	store.SetLoadErr(testErr)
 	_, err = store.Load()
 	if err != testErr {
 		t.Errorf("Load error = %v, want simulated failure", err)
 	}
 
-	store.DeleteErr = testErr
+	store.SetDeleteErr(testErr)
 	if err := store.Delete(); err != testErr {
 		t.Errorf("Delete error = %v, want simulated failure", err)
 	}
 
 	// Clear errors and verify normal operation resumes.
-	store.SaveErr = nil
-	store.LoadErr = nil
-	store.DeleteErr = nil
+	store.SetSaveErr(nil)
+	store.SetLoadErr(nil)
+	store.SetDeleteErr(nil)
 	if err := store.Delete(); err != nil {
 		t.Fatalf("Delete after clearing error: %v", err)
 	}
