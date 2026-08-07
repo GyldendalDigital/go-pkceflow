@@ -272,19 +272,24 @@ func TestFakeIDP_SetTokenError(t *testing.T) {
 func TestFakeIDP_ConfigurableTokenExpiry(t *testing.T) {
 	idp := NewFakeIDP(t, WithAccessTTL(10*time.Second))
 
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := computeS256Challenge(verifier)
 	authResp := authorizeRequest(t, idp, url.Values{
-		"client_id":     {"test-client"},
-		"redirect_uri":  {"http://127.0.0.1:0/callback"},
-		"response_type": {"code"},
-		"state":         {"s"},
+		"client_id":             {"test-client"},
+		"redirect_uri":          {"http://127.0.0.1:0/callback"},
+		"response_type":         {"code"},
+		"state":                 {"s"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
 	})
 	code := authResp.Query().Get("code")
 
 	resp, err := http.PostForm(idp.IssuerURL()+"/token", url.Values{
-		"grant_type":   {"authorization_code"},
-		"code":         {code},
-		"redirect_uri": {"http://127.0.0.1:0/callback"},
-		"client_id":    {"test-client"},
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {"http://127.0.0.1:0/callback"},
+		"client_id":     {"test-client"},
+		"code_verifier": {verifier},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -304,19 +309,24 @@ func TestFakeIDP_RefreshTokenRotationInvalidatesOld(t *testing.T) {
 	idp := NewFakeIDP(t)
 
 	// Get initial tokens
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := computeS256Challenge(verifier)
 	authResp := authorizeRequest(t, idp, url.Values{
-		"client_id":     {"test-client"},
-		"redirect_uri":  {"http://127.0.0.1:0/callback"},
-		"response_type": {"code"},
-		"state":         {"s"},
+		"client_id":             {"test-client"},
+		"redirect_uri":          {"http://127.0.0.1:0/callback"},
+		"response_type":         {"code"},
+		"state":                 {"s"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
 	})
 	code := authResp.Query().Get("code")
 
 	resp, _ := http.PostForm(idp.IssuerURL()+"/token", url.Values{
-		"grant_type":   {"authorization_code"},
-		"code":         {code},
-		"redirect_uri": {"http://127.0.0.1:0/callback"},
-		"client_id":    {"test-client"},
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {"http://127.0.0.1:0/callback"},
+		"client_id":     {"test-client"},
+		"code_verifier": {verifier},
 	})
 	var tokens struct {
 		RefreshToken string `json:"refresh_token"`
@@ -344,6 +354,272 @@ func TestFakeIDP_RefreshTokenRotationInvalidatesOld(t *testing.T) {
 	resp3.Body.Close()
 	if resp3.StatusCode != http.StatusBadRequest {
 		t.Fatalf("reuse of rotated token should fail, got %d", resp3.StatusCode)
+	}
+}
+
+func TestFakeIDP_StrictMode_RequiresPKCE(t *testing.T) {
+	idp := NewFakeIDP(t)
+
+	// Authorize without PKCE should fail in strict mode.
+	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+
+	resp, err := client.Get(idp.IssuerURL() + "/authorize?" + url.Values{
+		"client_id":     {"test-client"},
+		"redirect_uri":  {"http://127.0.0.1:0/callback"},
+		"response_type": {"code"},
+		"state":         {"s"},
+	}.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("expected redirect, got %d", resp.StatusCode)
+	}
+	location := resp.Header.Get("Location")
+	u, _ := url.Parse(location)
+	if u.Query().Get("error") != "invalid_request" {
+		t.Errorf("expected invalid_request error, got %q", u.Query().Get("error"))
+	}
+}
+
+func TestFakeIDP_StrictMode_RequiresResponseTypeCode(t *testing.T) {
+	idp := NewFakeIDP(t)
+
+	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := computeS256Challenge(verifier)
+
+	resp, err := client.Get(idp.IssuerURL() + "/authorize?" + url.Values{
+		"client_id":             {"test-client"},
+		"redirect_uri":          {"http://127.0.0.1:0/callback"},
+		"response_type":         {"token"}, // wrong!
+		"state":                 {"s"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("expected redirect, got %d", resp.StatusCode)
+	}
+	location := resp.Header.Get("Location")
+	u, _ := url.Parse(location)
+	if u.Query().Get("error") != "unsupported_response_type" {
+		t.Errorf("expected unsupported_response_type error, got %q", u.Query().Get("error"))
+	}
+}
+
+func TestFakeIDP_StrictMode_RejectsUnregisteredRedirectURI(t *testing.T) {
+	idp := NewFakeIDP(t)
+
+	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+
+	// Use an unregistered redirect_uri — must get 400 (not a redirect, since URI is untrusted).
+	resp, err := client.Get(idp.IssuerURL() + "/authorize?" + url.Values{
+		"client_id":             {"test-client"},
+		"redirect_uri":          {"http://evil.example.com/callback"},
+		"response_type":         {"code"},
+		"state":                 {"s"},
+		"code_challenge":        {"challenge"},
+		"code_challenge_method": {"S256"},
+	}.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unregistered redirect_uri, got %d", resp.StatusCode)
+	}
+}
+
+func TestFakeIDP_StrictMode_CodeExpiry(t *testing.T) {
+	now := time.Now()
+	clock := func() time.Time { return now }
+	idp := NewFakeIDP(t, WithClock(clock), WithCodeTTL(10*time.Second))
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := computeS256Challenge(verifier)
+	authResp := authorizeRequest(t, idp, url.Values{
+		"client_id":             {"test-client"},
+		"redirect_uri":          {"http://127.0.0.1:0/callback"},
+		"response_type":         {"code"},
+		"state":                 {"s"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	})
+	code := authResp.Query().Get("code")
+
+	// Advance time past code TTL.
+	now = now.Add(11 * time.Second)
+
+	resp, err := http.PostForm(idp.IssuerURL()+"/token", url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {"http://127.0.0.1:0/callback"},
+		"client_id":     {"test-client"},
+		"code_verifier": {verifier},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for expired code, got %d", resp.StatusCode)
+	}
+
+	var errResp struct {
+		Error string `json:"error"`
+	}
+	json.NewDecoder(resp.Body).Decode(&errResp) //nolint:errcheck
+	if errResp.Error != "invalid_grant" {
+		t.Errorf("error = %q, want invalid_grant", errResp.Error)
+	}
+}
+
+func TestFakeIDP_StrictMode_ClientIDMismatchOnExchange(t *testing.T) {
+	idp := NewFakeIDP(t)
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := computeS256Challenge(verifier)
+	authResp := authorizeRequest(t, idp, url.Values{
+		"client_id":             {"test-client"},
+		"redirect_uri":          {"http://127.0.0.1:0/callback"},
+		"response_type":         {"code"},
+		"state":                 {"s"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	})
+	code := authResp.Query().Get("code")
+
+	// Exchange with a different client_id.
+	resp, err := http.PostForm(idp.IssuerURL()+"/token", url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {"http://127.0.0.1:0/callback"},
+		"client_id":     {"wrong-client"},
+		"code_verifier": {verifier},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for client_id mismatch, got %d", resp.StatusCode)
+	}
+}
+
+func TestFakeIDP_StrictMode_RedirectURIMismatchOnExchange(t *testing.T) {
+	idp := NewFakeIDP(t, WithRedirectURI("http://127.0.0.1:9999/callback"))
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := computeS256Challenge(verifier)
+	authResp := authorizeRequest(t, idp, url.Values{
+		"client_id":             {"test-client"},
+		"redirect_uri":          {"http://127.0.0.1:9999/callback"},
+		"response_type":         {"code"},
+		"state":                 {"s"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	})
+	code := authResp.Query().Get("code")
+
+	// Exchange with a different redirect_uri.
+	resp, err := http.PostForm(idp.IssuerURL()+"/token", url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {"http://127.0.0.1:8888/callback"},
+		"client_id":     {"test-client"},
+		"code_verifier": {verifier},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for redirect_uri mismatch, got %d", resp.StatusCode)
+	}
+}
+
+func TestFakeIDP_StrictMode_ScopeValidation(t *testing.T) {
+	idp := NewFakeIDP(t, WithAllowedScopes("openid", "profile", "email", "offline_access"))
+
+	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := computeS256Challenge(verifier)
+
+	resp, err := client.Get(idp.IssuerURL() + "/authorize?" + url.Values{
+		"client_id":             {"test-client"},
+		"redirect_uri":          {"http://127.0.0.1:0/callback"},
+		"response_type":         {"code"},
+		"state":                 {"s"},
+		"scope":                 {"openid bogus_scope"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("expected redirect, got %d", resp.StatusCode)
+	}
+	location := resp.Header.Get("Location")
+	u, _ := url.Parse(location)
+	if u.Query().Get("error") != "invalid_scope" {
+		t.Errorf("expected invalid_scope error, got %q", u.Query().Get("error"))
+	}
+}
+
+func TestFakeIDP_LenientMode_NoPKCERequired(t *testing.T) {
+	idp := NewFakeIDP(t, WithLenientMode())
+
+	// Without PKCE, lenient mode should still succeed.
+	authResp := authorizeRequest(t, idp, url.Values{
+		"client_id":     {"test-client"},
+		"redirect_uri":  {"http://127.0.0.1:0/callback"},
+		"response_type": {"code"},
+		"state":         {"s"},
+	})
+	code := authResp.Query().Get("code")
+	if code == "" {
+		t.Fatal("expected authorization code in lenient mode without PKCE")
+	}
+
+	// Exchange without code_verifier should succeed.
+	resp, err := http.PostForm(idp.IssuerURL()+"/token", url.Values{
+		"grant_type":   {"authorization_code"},
+		"code":         {code},
+		"redirect_uri": {"http://127.0.0.1:0/callback"},
+		"client_id":    {"test-client"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200 in lenient mode, got %d: %s", resp.StatusCode, body)
 	}
 }
 
