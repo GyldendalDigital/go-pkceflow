@@ -105,6 +105,52 @@ URI at the provider. The provider guides below cover the other required
 settings. Keep access and refresh tokens in the Go backend; do not display them
 or send them to a webview.
 
+### Separate Logout Callback
+
+To show a distinct page after logout, register a second URI as a
+`post_logout_redirect_uri` with the IdP and configure it on the handler:
+
+```go
+handler := desktopflow.New(15051)
+if err := handler.SetLogoutPath("/logout-callback"); err != nil {
+    log.Fatal(err)
+}
+// Register http://127.0.0.1:15051/logout-callback as post_logout_redirect_uri
+```
+
+The browser will now show "Logged Out" instead of "Authentication Successful"
+after RP-Initiated Logout completes.
+
+### Custom Callback Pages
+
+Override the default HTML pages shown in the browser after a callback:
+
+```go
+handler.SuccessHTML = "<html><body>You're signed in — close this tab.</body></html>"
+handler.LogoutHTML  = "<html><body>Signed out — see you next time.</body></html>"
+handler.ErrorHTML   = "<html><body>Something went wrong. Try again.</body></html>"
+```
+
+For production apps, use `//go:embed` to compile HTML files into the binary:
+
+```go
+import _ "embed"
+
+//go:embed assets/success.html
+var successPage string
+
+//go:embed assets/logout.html
+var logoutPage string
+
+func setupHandler() *desktopflow.Handler {
+    handler := desktopflow.New(15051)
+    _ = handler.SetLogoutPath("/logout-callback")
+    handler.SuccessHTML = successPage
+    handler.LogoutHTML = logoutPage
+    return handler
+}
+```
+
 ## Example CLI App
 
 An interactive CLI demonstrating the full auth lifecycle is included:
