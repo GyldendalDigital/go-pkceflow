@@ -26,12 +26,14 @@ type Client struct {
 
 	httpClient *http.Client // nil = library default; routes all outbound HTTP
 
-	// Lifecycle replacement and Login/Logout commits acquire lifecycleMu before
-	// stateCommitMu. Refresh registration acquires refreshMu before mu. State
-	// transitions acquire stateCommitMu before mu and may then enqueue events
-	// under eventMu. Persistence runs under stateCommitMu but never mu; browser
-	// flows, token endpoint work, and EventEmitter callbacks hold none of these
-	// locks.
+	// Init commits acquire initMu before mu and Init failures may then enqueue
+	// events under eventMu. Lifecycle replacement and Login/Logout commits acquire
+	// lifecycleMu before stateCommitMu. Refresh registration acquires refreshMu
+	// before mu. State transitions acquire stateCommitMu before mu and may then
+	// enqueue events under eventMu. Persistence runs under stateCommitMu but never
+	// mu; discovery, browser flows, token endpoint work, and EventEmitter callbacks
+	// hold none of these locks.
+	initMu        sync.Mutex
 	lifecycleMu   sync.Mutex
 	stateCommitMu sync.Mutex
 	refreshMu     sync.Mutex
@@ -53,6 +55,8 @@ type Client struct {
 	persistenceRetry    persistenceRetryState
 	persistenceClaimSeq uint64
 	restoreBlocked      bool
+	initSeq             uint64
+	initOperation       *initOperation
 	lifecycleSeq        uint64
 	lifecycleOperation  *lifecycleOperation
 	lifecycleFlow       chan struct{}
@@ -289,22 +293,41 @@ func (c *Client) refreshPermanentlyBlockedLocked() bool {
 		c.refreshSchedule.disposition == refreshLoopBlockedPermanent
 }
 
-// Init performs OIDC discovery and configures the OAuth2 client.
-// Call this after New() and optionally after RestoreSession().
+type initOperation struct {
+	id     uint64
+	parent context.Context
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+type initSnapshot struct {
+	provider           *oidc.Provider
+	verifier           *oidc.IDTokenVerifier
+	oauth2             *oauth2.Config
+	endSessionEndpoint string
+}
+
+// Init performs OIDC discovery and configures the OAuth2 client. Call this
+// after New() and optionally after RestoreSession().
+//
 // Init failure is non-fatal: the app can work offline with cached tokens.
-// Idempotent: calling Init() again re-discovers.
+// Calling Init again re-discovers. When calls overlap, the latest admitted call
+// supersedes older calls on the same Client. Before applying a discovery
+// result, Init rechecks operation ownership and cancellation. A call that loses
+// that check does not replace discovery state, wake refresh work, or emit
+// EventInitFailed; its returned error wraps the applicable context error.
 func (c *Client) Init(ctx context.Context) error {
-	provider, err := oidc.NewProvider(c.httpContext(ctx), c.config.IssuerURL)
+	operation := c.beginInitOperation(ctx)
+	if operation == nil {
+		return c.wrapInitError(ctx.Err())
+	}
+	defer c.finishInitOperation(operation)
+
+	provider, err := oidc.NewProvider(c.httpContext(operation.ctx), c.config.IssuerURL)
 	if err != nil {
-		c.emitEvent(EventInitFailed, nil)
-		return fmt.Errorf("pkceflow: OIDC discovery failed for %q: %w", c.config.IssuerURL, err)
+		return c.wrapInitError(c.completeInitFailure(operation, err))
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.provider = provider
-	c.verifier = provider.Verifier(&oidc.Config{ClientID: c.config.ClientID})
 	endpoint := provider.Endpoint()
 	// Force client_id in the request body (RFC 6749 section 2.3.1 "including the
 	// client credentials in the request-body"). pkceflow targets public native
@@ -314,23 +337,116 @@ func (c *Client) Init(ctx context.Context) error {
 	// single-use authorization code, so the automatic retry fails with
 	// "invalid_grant: Code not valid". Setting the style avoids the probe.
 	endpoint.AuthStyle = oauth2.AuthStyleInParams
-	c.oauth2 = &oauth2.Config{
-		ClientID:    c.config.ClientID,
-		Endpoint:    endpoint,
-		RedirectURL: c.flow.RedirectURI(),
-		Scopes:      c.config.Scopes,
+	snapshot := initSnapshot{
+		provider: provider,
+		verifier: provider.Verifier(&oidc.Config{ClientID: c.config.ClientID}),
+		oauth2: &oauth2.Config{
+			ClientID:    c.config.ClientID,
+			Endpoint:    endpoint,
+			RedirectURL: c.flow.RedirectURI(),
+			Scopes:      c.config.Scopes,
+		},
 	}
 
 	// Extract end_session_endpoint from discovery claims (for RP-Initiated Logout)
 	var claims struct {
 		EndSessionEndpoint string `json:"end_session_endpoint"`
 	}
-	if err := provider.Claims(&claims); err == nil && claims.EndSessionEndpoint != "" {
-		c.endSessionEndpoint = claims.EndSessionEndpoint
+	if err := provider.Claims(&claims); err == nil {
+		snapshot.endSessionEndpoint = claims.EndSessionEndpoint
 	}
-	c.signalRefreshLoopLocked()
 
+	return c.wrapInitError(c.commitInit(operation, snapshot))
+}
+
+func (c *Client) beginInitOperation(ctx context.Context) *initOperation {
+	c.initMu.Lock()
+	defer c.initMu.Unlock()
+	if ctx.Err() != nil {
+		return nil
+	}
+
+	if c.initOperation != nil {
+		c.initOperation.cancel()
+	}
+	c.initSeq++
+	operationCtx, cancel := context.WithCancel(ctx)
+	operation := &initOperation{
+		id:     c.initSeq,
+		parent: ctx,
+		ctx:    operationCtx,
+		cancel: cancel,
+	}
+	c.initOperation = operation
+	return operation
+}
+
+func (c *Client) finishInitOperation(operation *initOperation) {
+	c.initMu.Lock()
+	if c.initOperation == operation && c.initOperation.id == operation.id {
+		c.initOperation = nil
+	}
+	c.initMu.Unlock()
+
+	operation.cancel()
+}
+
+func (c *Client) initOperationCurrentLocked(operation *initOperation) bool {
+	return c.initOperation == operation &&
+		c.initOperation.id == operation.id &&
+		operation.parent.Err() == nil &&
+		operation.ctx.Err() == nil
+}
+
+func (c *Client) completeInitFailure(operation *initOperation, discoveryErr error) error {
+	c.initMu.Lock()
+	if !c.initOperationCurrentLocked(operation) {
+		c.initMu.Unlock()
+		return initOperationContextError(operation)
+	}
+	shouldDrain := c.enqueueEvent(EventInitFailed, nil)
+	c.initMu.Unlock()
+
+	if shouldDrain {
+		c.drainEvents()
+	}
+	return discoveryErr
+}
+
+func (c *Client) commitInit(operation *initOperation, snapshot initSnapshot) error {
+	c.initMu.Lock()
+	c.mu.Lock()
+	if !c.initOperationCurrentLocked(operation) {
+		c.mu.Unlock()
+		c.initMu.Unlock()
+		return initOperationContextError(operation)
+	}
+
+	c.provider = snapshot.provider
+	c.verifier = snapshot.verifier
+	c.oauth2 = snapshot.oauth2
+	c.endSessionEndpoint = snapshot.endSessionEndpoint
+	c.signalRefreshLoopLocked()
+	c.mu.Unlock()
+	c.initMu.Unlock()
 	return nil
+}
+
+func initOperationContextError(operation *initOperation) error {
+	if err := operation.parent.Err(); err != nil {
+		return err
+	}
+	if err := operation.ctx.Err(); err != nil {
+		return err
+	}
+	return context.Canceled
+}
+
+func (c *Client) wrapInitError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("pkceflow: OIDC discovery failed for %q: %w", c.config.IssuerURL, err)
 }
 
 // initialized reports whether Init() has been called successfully.
