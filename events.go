@@ -16,7 +16,7 @@ type clientEvent struct {
 //
 // Error scenarios:
 //
-//	Init fails           -> EventInitFailed (non-fatal, app continues offline)
+//	Current Init discovery fails -> EventInitFailed (non-fatal, app continues offline)
 //	Refresh permanently fails -> EventSessionExpired (user must re-authenticate)
 const (
 	// EventLoggedIn is emitted after a successful Login() token exchange.
@@ -36,9 +36,10 @@ const (
 	// or when a refresh response fails session-integrity checks.
 	EventSessionExpired = "oidcauth:session-expired"
 
-	// EventInitFailed is emitted when Init() fails to perform OIDC discovery.
-	// This is non-fatal: the app can continue offline with cached tokens
-	// from RestoreSession().
+	// EventInitFailed is emitted when an Init() discovery failure reaches its
+	// result fence while that call is current and not canceled. Calls that lose
+	// that fence do not emit it. This is non-fatal: the app can continue offline
+	// with cached tokens from RestoreSession().
 	EventInitFailed = "oidcauth:init-failed"
 )
 
@@ -74,12 +75,6 @@ func (c *Client) drainEvents() {
 		c.eventMu.Unlock()
 
 		c.emitter.Emit(event.name, event.data)
-	}
-}
-
-func (c *Client) emitEvent(event string, data any) {
-	if c.enqueueEvent(event, data) {
-		c.drainEvents()
 	}
 }
 

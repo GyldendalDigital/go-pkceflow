@@ -83,6 +83,16 @@ name. It never binds a wildcard address.
 
 ## Client lifecycle ordering
 
+Each Client also admits one current OIDC discovery operation. A newly admitted
+`Init` cancels and supersedes the previous operation on that Client, while a
+call whose context is already canceled is not admitted. Discovery network work
+runs without Client locks. Before committing the provider, verifier, OAuth2
+configuration, logout endpoint, and refresh wakeup as one snapshot, `Init`
+rechecks both operation ownership and cancellation under the Init commit lock.
+Only a discovery failure that is current and not canceled at its result fence
+emits `oidcauth:init-failed`; calls that lose that fence leave the previous
+snapshot and event stream unchanged.
+
 Each Client admits one current login/logout operation identity. A newly admitted
 Login or Logout cancels the previous operation; overlapping Logout calls are the
 exception and coalesce. Login checks that identity and its context inside the
