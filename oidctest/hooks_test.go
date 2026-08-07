@@ -116,7 +116,7 @@ func TestRequestRecorder(t *testing.T) {
 		return http.ErrUseLastResponse
 	}}
 
-	_, _ = client.Get(idp.IssuerURL() + "/authorize?" + url.Values{
+	authResp, err := client.Get(idp.IssuerURL() + "/authorize?" + url.Values{
 		"client_id":             {"test-client"},
 		"redirect_uri":          {"http://127.0.0.1:0/callback"},
 		"response_type":         {"code"},
@@ -125,6 +125,10 @@ func TestRequestRecorder(t *testing.T) {
 		"code_challenge":        {"abc"},
 		"code_challenge_method": {"S256"},
 	}.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer authResp.Body.Close()
 
 	resp, err := http.Get(idp.IssuerURL() + "/jwks")
 	if err != nil {
