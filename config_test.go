@@ -73,7 +73,7 @@ func TestConfig_Validate_Defaults(t *testing.T) {
 
 	defaults := DefaultScopes()
 	if len(cfg.Scopes) != len(defaults) {
-		t.Errorf("Scopes = %v, want %v", cfg.Scopes, defaults)
+		t.Fatalf("Scopes length = %d, want %d (%v vs %v)", len(cfg.Scopes), len(defaults), cfg.Scopes, defaults)
 	}
 	for i, s := range cfg.Scopes {
 		if s != defaults[i] {
