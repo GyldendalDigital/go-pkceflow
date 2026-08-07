@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,6 +22,15 @@ import (
 // FakeIDPServer is a fake OIDC provider for testing.
 // It implements discovery, authorization, token exchange, JWKS, and end_session endpoints.
 // Safe for concurrent use and parallel tests.
+//
+// By default, the server enforces strict native-client protocol rules:
+//   - PKCE S256 is mandatory (code_challenge + code_challenge_method required)
+//   - redirect_uri must match a pre-registered value
+//   - response_type must be "code"
+//   - Authorization codes expire (default 30 seconds)
+//   - client_id on token exchange must match the code's originating client
+//
+// Use WithLenientMode() to disable all strict checks (legacy behavior).
 type FakeIDPServer struct {
 	// Server is the underlying httptest.Server. Use IssuerURL() instead of accessing directly.
 	Server *httptest.Server
@@ -30,9 +40,11 @@ type FakeIDPServer struct {
 	signer          jose.Signer
 	clientID        string
 	redirectURIs    []string
+	scopes          []string // allowed scopes; empty means accept any
 	accessTTL       time.Duration
 	refreshTTL      time.Duration
 	idTokenTTL      time.Duration
+	codeTTL         time.Duration           // authorization code lifetime
 	codes           map[string]*pendingCode // authorization code -> pending exchange
 	refreshTokens   map[string]*tokenState  // refresh token -> associated state
 	errorQueue      []string                // queued errors to return on next token request
@@ -42,6 +54,7 @@ type FakeIDPServer struct {
 	omitRefreshID   bool                    // when true, refresh responses omit id_token
 	refreshSubject  *string                 // when set, overrides refresh ID token subject
 	refreshRawID    *string                 // when set, refresh responses use this raw id_token
+	lenient         bool                    // when true, disables strict protocol checks
 	nowFunc         func() time.Time
 }
 
@@ -132,6 +145,27 @@ func WithRejectBasicAuth() Option {
 	return func(s *FakeIDPServer) { s.rejectBasicAuth = true }
 }
 
+// WithAllowedScopes sets the scopes the server will accept. Unknown scopes in
+// the authorization request cause an invalid_scope error redirect. An empty
+// list (the default) accepts any scope.
+func WithAllowedScopes(scopes ...string) Option {
+	return func(s *FakeIDPServer) { s.scopes = append([]string(nil), scopes...) }
+}
+
+// WithCodeTTL sets the authorization code lifetime. Default: 30 seconds.
+// Real IdPs typically use 30-60 seconds.
+func WithCodeTTL(d time.Duration) Option {
+	return func(s *FakeIDPServer) { s.codeTTL = d }
+}
+
+// WithLenientMode disables strict protocol enforcement. In lenient mode, the
+// server does not require PKCE, does not validate redirect URIs against the
+// registered list, and does not enforce code expiry. Use this only for legacy
+// tests that were written before strict mode was the default.
+func WithLenientMode() Option {
+	return func(s *FakeIDPServer) { s.lenient = true }
+}
+
 // NewFakeIDP creates and starts a fake OIDC provider.
 // The server is automatically closed when the test ends via t.Cleanup.
 func NewFakeIDP(t *testing.T, opts ...Option) *FakeIDPServer {
@@ -156,6 +190,7 @@ func NewFakeIDP(t *testing.T, opts ...Option) *FakeIDPServer {
 		accessTTL:     5 * time.Minute,
 		refreshTTL:    24 * time.Hour,
 		idTokenTTL:    5 * time.Minute,
+		codeTTL:       30 * time.Second,
 		codes:         make(map[string]*pendingCode),
 		refreshTokens: make(map[string]*tokenState),
 		nowFunc:       time.Now,
@@ -244,21 +279,66 @@ func (s *FakeIDPServer) handleDiscovery(w http.ResponseWriter, _ *http.Request) 
 
 // handleAuthorize simulates the authorization endpoint.
 // It redirects to the redirect_uri with code and state parameters.
+// In strict mode (default), it enforces native-client protocol requirements.
 func (s *FakeIDPServer) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	clientID := r.URL.Query().Get("client_id")
 	redirectURI := r.URL.Query().Get("redirect_uri")
 	state := r.URL.Query().Get("state")
+	responseType := r.URL.Query().Get("response_type")
 	codeChallenge := r.URL.Query().Get("code_challenge")
 	codeChallengeMethod := r.URL.Query().Get("code_challenge_method")
+	scope := r.URL.Query().Get("scope")
 	nonce := r.URL.Query().Get("nonce")
 
+	// Validate client_id (always enforced).
 	if clientID != s.clientID {
 		http.Error(w, "invalid client_id", http.StatusBadRequest)
 		return
 	}
-	if codeChallengeMethod != "" && codeChallengeMethod != "S256" {
+
+	// Validate redirect_uri is registered (pre-redirect check: errors here
+	// must NOT redirect, since the redirect target is untrusted).
+	if redirectURI == "" {
+		http.Error(w, "missing redirect_uri", http.StatusBadRequest)
+		return
+	}
+	if !s.lenient && !s.isRegisteredRedirectURI(redirectURI) {
+		http.Error(w, "unregistered redirect_uri", http.StatusBadRequest)
+		return
+	}
+
+	// From this point, redirect_uri is trusted — errors redirect with error params.
+
+	// Validate response_type (strict mode).
+	if !s.lenient && responseType != "code" {
+		redirectWithError(w, r, redirectURI, state, "unsupported_response_type", "only code is supported")
+		return
+	}
+
+	// Validate PKCE (strict mode: mandatory for native public clients per RFC 7636).
+	if !s.lenient {
+		if codeChallenge == "" {
+			redirectWithError(w, r, redirectURI, state, "invalid_request", "code_challenge is required")
+			return
+		}
+		if codeChallengeMethod != "S256" {
+			redirectWithError(w, r, redirectURI, state, "invalid_request", "code_challenge_method must be S256")
+			return
+		}
+	} else if codeChallengeMethod != "" && codeChallengeMethod != "S256" {
 		redirectWithError(w, r, redirectURI, state, "invalid_request", "only S256 supported")
 		return
+	}
+
+	// Validate scopes (if allowed scopes are configured).
+	s.mu.Lock()
+	allowedScopes := s.scopes
+	s.mu.Unlock()
+	if len(allowedScopes) > 0 && scope != "" {
+		if unknownScope := s.findUnknownScope(scope, allowedScopes); unknownScope != "" {
+			redirectWithError(w, r, redirectURI, state, "invalid_scope", "unknown scope: "+unknownScope)
+			return
+		}
 	}
 
 	// Generate authorization code
@@ -278,14 +358,16 @@ func (s *FakeIDPServer) handleAuthorize(w http.ResponseWriter, r *http.Request) 
 	}
 	s.mu.Unlock()
 
-	// Redirect with code + state
-	sep := "?"
-	if redirectURI == "" {
-		http.Error(w, "missing redirect_uri", http.StatusBadRequest)
+	redirectURL, err := url.Parse(redirectURI)
+	if err != nil {
+		http.Error(w, "invalid redirect_uri", http.StatusBadRequest)
 		return
 	}
-	location := fmt.Sprintf("%s%scode=%s&state=%s", redirectURI, sep, code, state)
-	http.Redirect(w, r, location, http.StatusFound) //nolint:gosec // G710: intentional redirect in test OIDC server
+	q := redirectURL.Query()
+	q.Set("code", code)
+	q.Set("state", state)
+	redirectURL.RawQuery = q.Encode()
+	http.Redirect(w, r, redirectURL.String(), http.StatusFound) //nolint:gosec // G710: intentional redirect in test OIDC server
 }
 
 // handleToken handles token exchange (authorization_code) and refresh (refresh_token).
@@ -340,16 +422,40 @@ func (s *FakeIDPServer) handleToken(w http.ResponseWriter, r *http.Request) {
 func (s *FakeIDPServer) handleAuthCodeExchange(w http.ResponseWriter, r *http.Request) {
 	code := r.FormValue("code")
 	codeVerifier := r.FormValue("code_verifier")
+	clientID := r.FormValue("client_id")
+	redirectURI := r.FormValue("redirect_uri")
 
 	s.mu.Lock()
 	pending, ok := s.codes[code]
 	if ok {
 		delete(s.codes, code) // one-time use
 	}
+	codeTTL := s.codeTTL
+	lenient := s.lenient
 	s.mu.Unlock()
 
 	if !ok {
 		tokenError(w, "invalid_grant", "invalid or expired authorization code")
+		return
+	}
+
+	// Enforce code expiry (strict mode).
+	if !lenient && codeTTL > 0 {
+		if s.now().Sub(pending.createdAt) > codeTTL {
+			tokenError(w, "invalid_grant", "authorization code expired")
+			return
+		}
+	}
+
+	// Verify client_id matches the one that initiated the authorization (strict mode).
+	if !lenient && clientID != pending.clientID {
+		tokenError(w, "invalid_grant", "client_id mismatch")
+		return
+	}
+
+	// Verify redirect_uri matches the one used in the authorization request (strict mode).
+	if !lenient && redirectURI != pending.redirectURI {
+		tokenError(w, "invalid_grant", "redirect_uri mismatch")
 		return
 	}
 
@@ -570,6 +676,57 @@ func tokenError(w http.ResponseWriter, code, description string) {
 }
 
 func redirectWithError(w http.ResponseWriter, r *http.Request, redirectURI, state, code, description string) {
-	location := fmt.Sprintf("%s?error=%s&error_description=%s&state=%s", redirectURI, code, description, state)
-	http.Redirect(w, r, location, http.StatusFound) //nolint:gosec // G710: intentional redirect in test OIDC server
+	redirectURL, err := url.Parse(redirectURI)
+	if err != nil {
+		http.Error(w, "invalid redirect_uri", http.StatusBadRequest)
+		return
+	}
+	q := redirectURL.Query()
+	q.Set("error", code)
+	q.Set("error_description", description)
+	q.Set("state", state)
+	redirectURL.RawQuery = q.Encode()
+	http.Redirect(w, r, redirectURL.String(), http.StatusFound) //nolint:gosec // G710: intentional redirect in test OIDC server
+}
+
+// isRegisteredRedirectURI checks whether the given URI matches a registered one.
+// A registered URI of "http://127.0.0.1:0/callback" matches any port on 127.0.0.1
+// with the path /callback (wildcard port convention for test servers).
+func (s *FakeIDPServer) isRegisteredRedirectURI(uri string) bool {
+	parsed, err := url.Parse(uri)
+	if err != nil {
+		return false
+	}
+	for _, registered := range s.redirectURIs {
+		reg, err := url.Parse(registered)
+		if err != nil {
+			continue
+		}
+		// Wildcard port: port "0" matches any port.
+		if reg.Scheme == parsed.Scheme && reg.Path == parsed.Path {
+			regHost := reg.Hostname()
+			parsedHost := parsed.Hostname()
+			if regHost == parsedHost {
+				if reg.Port() == "0" || reg.Port() == parsed.Port() {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// findUnknownScope returns the first scope in the space-separated scope string
+// that is not in the allowed list. Returns empty string if all are valid.
+func (s *FakeIDPServer) findUnknownScope(scopeStr string, allowed []string) string {
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, sc := range allowed {
+		allowedSet[sc] = struct{}{}
+	}
+	for _, sc := range strings.Fields(scopeStr) {
+		if _, ok := allowedSet[sc]; !ok {
+			return sc
+		}
+	}
+	return ""
 }
