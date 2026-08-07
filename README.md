@@ -112,7 +112,9 @@ To show a distinct page after logout, register a second URI as a
 
 ```go
 handler := desktopflow.New(15051)
-handler.SetLogoutPath("/logout-callback")
+if err := handler.SetLogoutPath("/logout-callback"); err != nil {
+    log.Fatal(err)
+}
 // Register http://127.0.0.1:15051/logout-callback as post_logout_redirect_uri
 ```
 
@@ -129,7 +131,25 @@ handler.LogoutHTML  = "<html><body>Signed out — see you next time.</body></htm
 handler.ErrorHTML   = "<html><body>Something went wrong. Try again.</body></html>"
 ```
 
-Or use `//go:embed` to load HTML files at build time.
+For production apps, use `//go:embed` to compile HTML files into the binary:
+
+```go
+import _ "embed"
+
+//go:embed assets/success.html
+var successPage string
+
+//go:embed assets/logout.html
+var logoutPage string
+
+func setupHandler() *desktopflow.Handler {
+    handler := desktopflow.New(15051)
+    _ = handler.SetLogoutPath("/logout-callback")
+    handler.SuccessHTML = successPage
+    handler.LogoutHTML = logoutPage
+    return handler
+}
+```
 
 ## Example CLI App
 
