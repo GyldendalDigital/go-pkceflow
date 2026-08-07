@@ -219,14 +219,18 @@ func TestGrantTypeErrorMap(t *testing.T) {
 	}
 
 	var errResp struct {
-		Error string `json:"error"`
+		Error       string `json:"error"`
+		Description string `json:"error_description"`
 	}
 	json.NewDecoder(resp2.Body).Decode(&errResp) //nolint:errcheck // test assertion follows
 	if errResp.Error != "invalid_grant" {
 		t.Errorf("error = %q, want invalid_grant", errResp.Error)
 	}
+	if errResp.Description != "simulated grant-scoped error" {
+		t.Errorf("error_description = %q, want simulated grant-scoped error", errResp.Description)
+	}
 
-	// Clear and retry.
+	// Clear and retry — the grant-scoped error should no longer fire.
 	idp.GrantErrors.Clear("refresh_token")
 	resp3, err := http.PostForm(idp.IssuerURL()+"/token", url.Values{
 		"grant_type":    {"refresh_token"},
@@ -237,9 +241,16 @@ func TestGrantTypeErrorMap(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp3.Body.Close()
-	// After clearing the grant error, the refresh token should be usable.
-	// It may still fail with invalid_grant if the token was already consumed
-	// by rotation during the error-injected request, but the grant-scoped
-	// error itself is no longer in effect.
-	_ = resp3.StatusCode
+	// The refresh token is still valid (grant error returns before consuming it).
+	// After clearing, the response should either succeed or fail for a different
+	// reason — but NOT with our injected description.
+	if resp3.StatusCode == http.StatusBadRequest {
+		var e struct {
+			Description string `json:"error_description"`
+		}
+		json.NewDecoder(resp3.Body).Decode(&e) //nolint:errcheck // test assertion follows
+		if e.Description == "simulated grant-scoped error" {
+			t.Error("grant-scoped error still active after Clear")
+		}
+	}
 }

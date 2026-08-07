@@ -23,12 +23,18 @@ type RequestRecorder struct {
 	records []RequestRecord
 }
 
-// Records returns a copy of all captured requests.
+// Records returns a deep copy of all captured requests.
 func (r *RequestRecorder) Records() []RequestRecord {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	result := make([]RequestRecord, len(r.records))
-	copy(result, r.records)
+	for i, rec := range r.records {
+		result[i] = RequestRecord{
+			Endpoint: rec.Endpoint,
+			Method:   rec.Method,
+			Params:   cloneValues(rec.Params),
+		}
+	}
 	return result
 }
 
@@ -39,7 +45,11 @@ func (r *RequestRecorder) RecordsFor(endpoint string) []RequestRecord {
 	var result []RequestRecord
 	for _, rec := range r.records {
 		if rec.Endpoint == endpoint {
-			result = append(result, rec)
+			result = append(result, RequestRecord{
+				Endpoint: rec.Endpoint,
+				Method:   rec.Method,
+				Params:   cloneValues(rec.Params),
+			})
 		}
 	}
 	return result
@@ -233,4 +243,16 @@ func (m *GrantTypeErrorMap) check(grantType string) (string, bool) {
 	}
 	code, ok := m.errors[grantType]
 	return code, ok
+}
+
+// cloneValues returns a deep copy of url.Values.
+func cloneValues(v url.Values) url.Values {
+	if v == nil {
+		return nil
+	}
+	c := make(url.Values, len(v))
+	for key, vals := range v {
+		c[key] = append([]string(nil), vals...)
+	}
+	return c
 }

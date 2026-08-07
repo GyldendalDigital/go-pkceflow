@@ -176,7 +176,7 @@ func NewFakeIDP(t *testing.T, opts ...Option) *FakeIDPServer {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /.well-known/openid-configuration", s.wrapHandler("/discovery", s.Hooks.runDiscovery, s.handleDiscovery))
+	mux.HandleFunc("GET /.well-known/openid-configuration", s.wrapHandler("/.well-known/openid-configuration", s.Hooks.runDiscovery, s.handleDiscovery))
 	mux.HandleFunc("GET /authorize", s.wrapHandler("/authorize", s.Hooks.runAuthorize, s.handleAuthorize))
 	mux.HandleFunc("POST /token", s.wrapHandler("/token", s.Hooks.runToken, s.handleToken))
 	mux.HandleFunc("GET /jwks", s.wrapHandler("/jwks", s.Hooks.runJWKS, s.handleJWKS))
