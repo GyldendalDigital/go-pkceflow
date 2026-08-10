@@ -29,7 +29,7 @@ func main() {
 	port := flag.Int("port", 15051, "Localhost callback port (must be registered with IdP)")
 	callbackPath := flag.String("callback-path", "/callback", "Callback path on the localhost server")
 	redirectURI := flag.String("redirect-uri", "", "Full redirect URI (overrides --port and --callback-path)")
-	logoutURI := flag.String("logout-uri", "", "Distinct post-logout redirect URI (overrides --logout-path)")
+	logoutURI := flag.String("logout-uri", "", "Full post-logout redirect URI (mutually exclusive with --logout-path; takes precedence over the default)")
 	logoutPath := flag.String("logout-path", "/logout-callback", "Callback path for logout on the same host and port as login")
 	scopes := flag.String("scopes", "", "Comma-separated scopes (default: openid,profile,email,offline_access)")
 	graceDays := flag.Int("grace-days", 0, "Offline grace period in days (0 = disabled)")
@@ -50,7 +50,7 @@ func main() {
 	}
 
 	if *logoutURI != "" && isFlagSet("logout-path") {
-		fmt.Fprintln(os.Stderr, "Error: --logout-uri and --logout-path are mutually exclusive")
+		fmt.Fprintln(os.Stderr, "Error: --logout-uri and --logout-path are mutually exclusive; use one or the other")
 		os.Exit(1)
 	}
 
