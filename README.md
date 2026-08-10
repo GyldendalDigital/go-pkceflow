@@ -105,23 +105,53 @@ URI at the provider. The provider guides below cover the other required
 settings. Keep access and refresh tokens in the Go backend; do not display them
 or send them to a webview.
 
-### Separate Logout Callback
+### Login and Logout Callbacks (Desktop)
 
-To show a distinct page after logout, register a second URI as a
-`post_logout_redirect_uri` with the IdP and configure it on the handler:
+On desktop, the library opens a localhost server and shows an HTML page in the
+browser when the IdP redirects back. To show the correct page for each flow,
+configure a separate logout callback path and register it as a
+`post_logout_redirect_uri` with the IdP:
 
 ```go
 handler := desktopflow.New(15051)
 if err := handler.SetLogoutPath("/logout-callback"); err != nil {
     log.Fatal(err)
 }
-// Register http://127.0.0.1:15051/logout-callback as post_logout_redirect_uri
+// Register with the IdP:
+//   redirect_uri:              http://127.0.0.1:15051/callback
+//   post_logout_redirect_uri:  http://127.0.0.1:15051/logout-callback
 ```
 
-The browser will now show "Logged Out" instead of "Authentication Successful"
-after RP-Initiated Logout completes.
+With this setup, login shows "Authentication Successful" and logout shows
+"Logged Out." Both paths share the same loopback port — only the path differs.
 
-### Custom Callback Pages
+If `SetLogoutPath` is not called, the library falls back to the login path for
+both flows and always shows "Authentication Successful." This works but is
+confusing to end users.
+
+### Login and Logout Callbacks (Mobile)
+
+On mobile, callbacks arrive via deep links (Universal Links on iOS, App Links on
+Android). The OS intercepts the redirect and delivers it directly to the app —
+no browser page is rendered, so there is no HTML to customize. Use `SetLogoutURI`
+to register a distinct deep link for logout:
+
+```go
+handler := mobileflow.New("https://myapp.example.com/auth/callback", openURL)
+if err := handler.SetLogoutURI("https://myapp.example.com/auth/logout-callback"); err != nil {
+    log.Fatal(err)
+}
+// Register with the IdP:
+//   redirect_uri:              https://myapp.example.com/auth/callback
+//   post_logout_redirect_uri:  https://myapp.example.com/auth/logout-callback
+```
+
+The separate URI is recommended so the app can distinguish which flow completed
+and update its UI accordingly (e.g. show a "welcome back" screen vs. return to
+the sign-in screen). Unlike desktop, there is no `LogoutHTML` field because the
+user never sees a browser tab — the app resumes immediately.
+
+### Custom Callback Pages (Desktop Only)
 
 Override the default HTML pages shown in the browser after a callback:
 
