@@ -29,8 +29,8 @@ func main() {
 	port := flag.Int("port", 15051, "Localhost callback port (must be registered with IdP)")
 	callbackPath := flag.String("callback-path", "/callback", "Callback path on the localhost server")
 	redirectURI := flag.String("redirect-uri", "", "Full redirect URI (overrides --port and --callback-path)")
-	logoutURI := flag.String("logout-uri", "", "Distinct post-logout redirect URI (loopback, same host:port as login, different path)")
-	logoutPath := flag.String("logout-path", "", "Distinct callback path for logout on the same host and port as login")
+	logoutURI := flag.String("logout-uri", "", "Full post-logout redirect URI (mutually exclusive with --logout-path; takes precedence over the default)")
+	logoutPath := flag.String("logout-path", "/logout-callback", "Callback path for logout on the same host and port as login")
 	scopes := flag.String("scopes", "", "Comma-separated scopes (default: openid,profile,email,offline_access)")
 	graceDays := flag.Int("grace-days", 0, "Offline grace period in days (0 = disabled)")
 	dataDir := flag.String("data-dir", "", "Token storage directory (default: ~/.config/pkceflow-example)")
@@ -49,8 +49,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	if *logoutURI != "" && *logoutPath != "" {
-		fmt.Fprintln(os.Stderr, "Error: --logout-uri and --logout-path are mutually exclusive")
+	if *logoutURI != "" && isFlagSet("logout-path") {
+		fmt.Fprintln(os.Stderr, "Error: --logout-uri and --logout-path are mutually exclusive; use one or the other")
 		os.Exit(1)
 	}
 
@@ -85,15 +85,16 @@ func main() {
 		}
 	}
 
-	// Configure a distinct logout callback when the IdP registers a separate
-	// post_logout_redirect_uri. Both default to the login redirect URI.
+	// Configure a distinct logout callback. The default --logout-path ensures
+	// login shows "Authentication Successful" and logout shows "Logged Out."
+	// Use --logout-uri to override with a full URI instead.
 	switch {
 	case *logoutURI != "":
 		if err := handler.SetLogoutURI(*logoutURI); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-	case *logoutPath != "":
+	default:
 		if err := handler.SetLogoutPath(*logoutPath); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
