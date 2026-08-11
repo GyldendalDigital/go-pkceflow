@@ -7,9 +7,9 @@ import (
 )
 
 func TestBearerTransport_InjectsToken(t *testing.T) {
-	var gotAuth string
+	gotAuth := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
+		gotAuth <- r.Header.Get("Authorization")
 	}))
 	defer server.Close()
 
@@ -23,15 +23,15 @@ func TestBearerTransport_InjectsToken(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if gotAuth != "Bearer test-access-token" {
-		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer test-access-token")
+	if got := <-gotAuth; got != "Bearer test-access-token" {
+		t.Errorf("Authorization = %q, want %q", got, "Bearer test-access-token")
 	}
 }
 
 func TestBearerTransport_OmitsHeaderWhenEmpty(t *testing.T) {
-	var gotAuth string
+	gotAuth := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
+		gotAuth <- r.Header.Get("Authorization")
 	}))
 	defer server.Close()
 
@@ -45,8 +45,8 @@ func TestBearerTransport_OmitsHeaderWhenEmpty(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if gotAuth != "" {
-		t.Errorf("Authorization should be empty when token is empty, got %q", gotAuth)
+	if got := <-gotAuth; got != "" {
+		t.Errorf("Authorization should be empty when token is empty, got %q", got)
 	}
 }
 

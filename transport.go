@@ -17,6 +17,9 @@ import "net/http"
 //	}
 //	resp, err := httpClient.Get("https://api.example.com/protected")
 func BearerTransport(tokenFn func() string, base http.RoundTripper) http.RoundTripper {
+	if tokenFn == nil {
+		panic("pkceflow.BearerTransport: tokenFn must not be nil")
+	}
 	if base == nil {
 		base = http.DefaultTransport
 	}
@@ -33,6 +36,12 @@ func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if token != "" {
 		req = req.Clone(req.Context())
 		req.Header.Set("Authorization", "Bearer "+token)
+	} else {
+		// Remove any pre-existing Authorization header when no token is available.
+		if req.Header.Get("Authorization") != "" {
+			req = req.Clone(req.Context())
+			req.Header.Del("Authorization")
+		}
 	}
 	return t.base.RoundTrip(req)
 }
