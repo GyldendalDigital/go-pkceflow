@@ -100,6 +100,22 @@ func main() {
 }
 ```
 
+### Injecting Tokens into HTTP Clients
+
+Use `BearerTransport` to automatically attach the access token to every
+outgoing request:
+
+```go
+httpClient := &http.Client{
+    Transport: pkceflow.BearerTransport(client.TokenFn(ctx), nil),
+}
+resp, err := httpClient.Get("https://api.example.com/protected")
+```
+
+The transport calls `TokenFn` on each request, refreshing the token if needed.
+If no valid token is available, the request is sent without an Authorization
+header. The original request is never mutated.
+
 Register `http://127.0.0.1:15051/callback` as an allowed native-app redirect
 URI at the provider. The provider guides below cover the other required
 settings. Keep access and refresh tokens in the Go backend; do not display them
@@ -287,7 +303,7 @@ New to OAuth/OIDC or setting up an IdP for the first time? Start here:
 
 | Package | Purpose |
 |---------|---------|
-| `pkceflow` | Core Client API (New, Init, Login, Logout, AccessToken, AuthStatus) |
+| `pkceflow` | Core Client API (New, Init, Login, Logout, AccessToken, TokenFn, BearerTransport) |
 | `desktopflow` | Localhost callback server + system browser opener |
 | `mobileflow` | URI- and state-correlated handler for mobile deep link callbacks |
 | `filestore` | AES-256-GCM encrypted token persistence |
