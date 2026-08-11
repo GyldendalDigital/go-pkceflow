@@ -36,12 +36,10 @@ func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if token != "" {
 		req = req.Clone(req.Context())
 		req.Header.Set("Authorization", "Bearer "+token)
-	} else {
+	} else if req.Header.Get("Authorization") != "" {
 		// Remove any pre-existing Authorization header when no token is available.
-		if req.Header.Get("Authorization") != "" {
-			req = req.Clone(req.Context())
-			req.Header.Del("Authorization")
-		}
+		req = req.Clone(req.Context())
+		req.Header.Del("Authorization")
 	}
 	return t.base.RoundTrip(req)
 }
