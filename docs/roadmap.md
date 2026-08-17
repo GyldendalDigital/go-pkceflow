@@ -125,8 +125,11 @@ use `mobileflow` when their native layer or framework supplies launch URLs.
 - [x] Complete manual Windows logout validation.
 - [ ] Complete manual macOS auth-lifecycle validation.
 - [ ] Make wrapper native OS checks feed required merge-gating contexts.
-- [ ] Decide whether the wrapper's `Client()` binding-surface workaround needs
-  a pre-1.0 API change, then freeze compatibility at RC.
+- [x] Decide the wrapper binding surface. `FrontendService` embeds an interface
+  declaring exactly the frontend-bindable methods, so the backend-only
+  `Client()`, `Pause()`, and `Resume()` never reach binding generation. No core
+  API change is required.
+- [ ] Freeze compatibility at RC.
 
 ## Wails Mobile Follow-up
 
@@ -154,3 +157,7 @@ high-value provider walkthroughs to keep maintenance sustainable.
 
 - OS-native credential store (keyring/Keychain) as an additional TokenPersistence
   backend. Additive behind the existing interface; no core API change required.
+- Watch the Wails community discussion on autodiscovery of frontend-bindable
+  services. If Wails lets a library declare which methods are bindable, the
+  wrapper's interface-embedding pattern can be simplified. This is an upstream
+  developer-experience improvement, not a release gate.
