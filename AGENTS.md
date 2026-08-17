@@ -200,7 +200,7 @@ As of the August 4, 2026 handoff:
    response scripting, then secondary endpoint/API cleanup. Do not add an
    external fake-provider dependency without new evidence.
 4. Complete remaining live platform/provider checks needed for stable-release
-   confidence, including macOS and Windows logout.
+   confidence. Windows logout is validated; the macOS auth lifecycle is not.
 5. Before a stable wrapper release, make native OS checks feed required merge
    contexts and decide whether the `Client()` binding-surface workaround needs
    a pre-1.0 API change.

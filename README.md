@@ -5,12 +5,12 @@ A framework-agnostic Go library for OIDC Authorization Code flow with PKCE (RFC 
 ## Status
 
 **Pre-1.0 beta.** The API may still change. A vanilla Keycloak run has covered
-login, token exchange, refresh, and logout on Linux, plus login, exchange, and
-refresh on Windows. The framework-agnostic mobile callback handler is tested,
-but each application or framework adapter remains responsible for delivering
-the OS launch URL to it. macOS auth lifecycle and Windows logout still need
-manual validation before a stable core release. Mobile host validation is
-adapter-specific and does not gate core v1 or desktop dogfooding.
+login, token exchange, refresh, and logout on both Linux and Windows. The
+framework-agnostic mobile callback handler is tested, but each application or
+framework adapter remains responsible for delivering the OS launch URL to it.
+The macOS auth lifecycle still needs manual validation before a stable core
+release. Mobile host validation is adapter-specific and does not gate core v1
+or desktop dogfooding.
 
 ## Features
 

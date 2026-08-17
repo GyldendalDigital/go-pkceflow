@@ -122,7 +122,8 @@ use `mobileflow` when their native layer or framework supplies launch URLs.
 - [ ] Harden the public `oidctest` fixture: strict native-client protocol
   binding and lifetimes, adversarial ID-token/JWKS integration cases,
   grant-scoped request/response scripting, and pre-v1 API cleanup.
-- [ ] Complete manual macOS auth-lifecycle and Windows logout validation.
+- [x] Complete manual Windows logout validation.
+- [ ] Complete manual macOS auth-lifecycle validation.
 - [ ] Make wrapper native OS checks feed required merge-gating contexts.
 - [ ] Decide whether the wrapper's `Client()` binding-surface workaround needs
   a pre-1.0 API change, then freeze compatibility at RC.
