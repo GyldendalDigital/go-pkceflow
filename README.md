@@ -211,8 +211,16 @@ go run ./examples/cli \
 This opens a menu for login, logout, token inspection, and status display.
 See [`examples/cli/main.go`](examples/cli/main.go) for the complete source.
 
-To try a distinct, separately registered post-logout redirect URI, add
-`--logout-path=/logout` (and register that URI with your IdP).
+The CLI configures a distinct post-logout redirect URI by default, so register
+both of these with your IdP before trying logout:
+
+```text
+redirect_uri:              http://127.0.0.1:15051/callback
+post_logout_redirect_uri:  http://127.0.0.1:15051/logout-callback
+```
+
+Pass `--logout-path` to choose a different path on the same host and port, or
+`--logout-uri` to supply a full URI. The two flags are mutually exclusive.
 
 ## Configuration Notes
 

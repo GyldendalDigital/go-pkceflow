@@ -60,7 +60,7 @@ http://127.0.0.1:15051/callback
 If using a separate logout path:
 
 ```go
-if err := handler.SetLogoutPath("/logout"); err != nil {
+if err := handler.SetLogoutPath("/logout-callback"); err != nil {
     return err
 }
 ```
@@ -68,7 +68,7 @@ if err := handler.SetLogoutPath("/logout"); err != nil {
 also register:
 
 ```text
-http://127.0.0.1:15051/logout
+http://127.0.0.1:15051/logout-callback
 ```
 
 Under **Authentication**, add a **Mobile and desktop applications** platform
@@ -85,7 +85,7 @@ manifest. In the current Microsoft Graph manifest format, put both URIs under
   "publicClient": {
     "redirectUris": [
       "http://127.0.0.1:15051/callback",
-      "http://127.0.0.1:15051/logout"
+      "http://127.0.0.1:15051/logout-callback"
     ]
   }
 }
@@ -153,7 +153,7 @@ ExtraAuthParams: map[string]string{
 
 ```go
 handler := desktopflow.New(15051)
-if err := handler.SetLogoutPath("/logout"); err != nil {
+if err := handler.SetLogoutPath("/logout-callback"); err != nil {
     return err
 }
 
@@ -180,9 +180,11 @@ code and PKCE verifier. It sends no client secret.
 go run ./examples/cli \
   --issuer=https://login.microsoftonline.com/YOUR_TENANT_ID/v2.0 \
   --client-id=YOUR_APPLICATION_CLIENT_ID \
-  --port=15051 \
-  --logout-path=/logout
+  --port=15051
 ```
+
+The CLI already defaults to `--logout-path=/logout-callback`, matching the
+redirect URI registered above.
 
 Verify login, ID token claims, refresh, and logout. If the tenant requires admin
 consent for a requested delegated permission, grant it according to your
@@ -193,7 +195,7 @@ organization's policy rather than weakening the client configuration.
 go-pkceflow discovers Entra's `end_session_endpoint` and sends the browser
 there with an ID token hint, state, and `post_logout_redirect_uri`. Entra
 requires the post-logout URI to match a redirect URI registered for the
-application, which is why the `/logout` URI above appears in the same
+application, which is why the `/logout-callback` URI above appears in the same
 public-client list.
 
 In-memory state is cleared and persistent deletion is attempted even if the
