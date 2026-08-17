@@ -278,7 +278,7 @@ additional backend later without breaking the API.
 
 | Provider | Project status | Notes |
 |----------|----------------|-------|
-| Keycloak | Manually validated | Linux: login, exchange, repeated refresh, logout. Windows: login, exchange, repeated refresh; logout not yet tested |
+| Keycloak | Manually validated | Linux and Windows: login, exchange, repeated refresh, logout. macOS auth lifecycle not yet validated |
 | Auth0 | Configuration guide | Native-app PKCE is expected to work; API audience and refresh policy are provider settings |
 | Microsoft Entra ID | Configuration guide | Use a tenant-specific v2 issuer and a public native-app registration |
 | Other OIDC providers | Compatibility checklist | Expected when discovery, PKCE S256, public token exchange, nonce-bearing ID tokens, and matching redirects are supported |

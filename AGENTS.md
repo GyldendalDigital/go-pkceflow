@@ -190,7 +190,7 @@ Useful docs in core:
 
 ## Current Backlog Priorities
 
-As of the August 4, 2026 handoff:
+As of August 17, 2026:
 
 1. Dogfood the core and desktop wrapper in the Ordnett Pluss rewrite.
 2. Triage dogfooding findings without expanding the stabilized pre-1.0 core API
@@ -200,10 +200,12 @@ As of the August 4, 2026 handoff:
    response scripting, then secondary endpoint/API cleanup. Do not add an
    external fake-provider dependency without new evidence.
 4. Complete remaining live platform/provider checks needed for stable-release
-   confidence, including macOS and Windows logout.
+   confidence. Windows logout is validated; the macOS auth lifecycle is not.
 5. Before a stable wrapper release, make native OS checks feed required merge
-   contexts and decide whether the `Client()` binding-surface workaround needs
-   a pre-1.0 API change.
+   contexts. The binding surface itself is decided: `FrontendService` embeds an
+   interface declaring exactly the frontend-bindable methods, and no core API
+   change is required. Treat any Wails autodiscovery of bindable services as an
+   upstream simplification to watch, not a release gate.
 6. Track wrapper issue #8 as Wails-specific mobile host validation. It does not
    block core or desktop dogfooding and must not drive core changes. Do not
    pursue upstream Wails implementation or pin an unreleased fork without an
