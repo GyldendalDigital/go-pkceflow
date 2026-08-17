@@ -58,11 +58,13 @@ separates login and logout callbacks.
 
 - **Allowed Logout URLs**: the post-logout redirect URI. This is a distinct
   list, which is why go-pkceflow lets you set a separate logout path with
-  `handler.SetLogoutPath("/logout")`:
+  `handler.SetLogoutPath("/logout-callback")`:
 
   ```
-  http://127.0.0.1:15051/logout
+  http://127.0.0.1:15051/logout-callback
   ```
+
+  The example CLI uses that same path by default.
 
   If you do not configure a separate logout path, register the same login
   callback URL here as well, because go-pkceflow reuses it.
@@ -125,9 +127,11 @@ policy decisions, not client-library defaults.
 go run ./examples/cli \
   --issuer=https://your-tenant.eu.auth0.com/ \
   --client-id=YOUR_CLIENT_ID \
-  --port=15051 \
-  --logout-path=/logout
+  --port=15051
 ```
+
+The CLI already defaults to `--logout-path=/logout-callback`, matching the
+Allowed Logout URL registered above.
 
 Log in with any user that exists in your Auth0 tenant. Use "Show access token"
 to inspect the verified ID token claims and "Logout" to exercise RP-Initiated

@@ -104,14 +104,16 @@ In the client's "Settings" tab:
 - **Valid post logout redirect URIs**: add the address the user returns to after
   logout. IdPs treat this as a *separate* list from the login redirect URIs,
   which is exactly why go-pkceflow lets you configure a distinct logout path. If
-  you call `handler.SetLogoutPath("/logout")`, register:
+  you call `handler.SetLogoutPath("/logout-callback")`, register:
 
   ```
-  http://127.0.0.1:15051/logout
+  http://127.0.0.1:15051/logout-callback
   ```
 
-  If you do not configure a separate logout path, go-pkceflow reuses the login
-  redirect URI, so add that same value here too.
+  The example CLI in step 7 uses that same path by default, so register it now
+  if you plan to test logout there. If you do not configure a separate logout
+  path, go-pkceflow reuses the login redirect URI, so add that same value here
+  too.
 
 > Tip for local development only: some teams register
 > `http://127.0.0.1:*/callback` to allow any port. Wildcards weaken the security
@@ -165,6 +167,12 @@ Choose "Login", authenticate as your test user in the browser, and you should
 land back on the localhost callback with a valid session. The CLI prints the
 configured redirect URIs and can show the verified ID token claims. Choose
 "Logout" to exercise RP-Initiated Logout.
+
+The CLI defaults to the distinct post-logout callback
+`http://127.0.0.1:15051/logout-callback`, which is the value registered in
+step 4. Keycloak rejects a post-logout redirect that is not on that list, so
+either register it or point the CLI elsewhere with `--logout-path` or
+`--logout-uri`.
 
 The CLI uses the library defaults. To test a different scope set, provide a
 comma-separated list:
