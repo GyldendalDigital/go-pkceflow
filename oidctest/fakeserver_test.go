@@ -988,3 +988,102 @@ func TestFakeIDP_ForceAudiences(t *testing.T) {
 		t.Fatalf("aud = %#v, want the single client ID after clearing", single["aud"])
 	}
 }
+
+func TestFakeIDP_Revoke(t *testing.T) {
+	idp := NewFakeIDP(t, WithClientID("my-app"))
+
+	if !strings.Contains(discoveryDocument(t, idp), `"revocation_endpoint"`) {
+		t.Fatal("discovery does not advertise revocation_endpoint")
+	}
+
+	t.Run("revokes the refresh token", func(t *testing.T) {
+		refreshToken := issueRefreshToken(t, idp, "my-app")
+		if !refreshGrantAccepted(t, idp, refreshToken, "my-app") {
+			t.Fatal("refresh token was not usable before revocation")
+		}
+
+		resp := postForm(t, idp.IssuerURL()+"/revoke", url.Values{
+			"token":           {refreshToken},
+			"token_type_hint": {"refresh_token"},
+			"client_id":       {"my-app"},
+		})
+		if resp != http.StatusOK {
+			t.Fatalf("revoke status = %d, want %d", resp, http.StatusOK)
+		}
+		if refreshGrantAccepted(t, idp, refreshToken, "my-app") {
+			t.Fatal("refresh token still works after revocation")
+		}
+	})
+
+	t.Run("unknown token still returns 200", func(t *testing.T) {
+		// RFC 7009 section 2.2 requires this, which is why a 200 alone never
+		// proves a token was revoked.
+		got := postForm(t, idp.IssuerURL()+"/revoke", url.Values{"token": {"never-issued"}})
+		if got != http.StatusOK {
+			t.Fatalf("revoke status = %d, want %d", got, http.StatusOK)
+		}
+	})
+
+	t.Run("missing token is rejected", func(t *testing.T) {
+		got := postForm(t, idp.IssuerURL()+"/revoke", url.Values{"token_type_hint": {"refresh_token"}})
+		if got != http.StatusBadRequest {
+			t.Fatalf("revoke status = %d, want %d", got, http.StatusBadRequest)
+		}
+	})
+}
+
+func TestFakeIDP_WithOmitRevocationEndpoint(t *testing.T) {
+	idp := NewFakeIDP(t, WithClientID("my-app"), WithOmitRevocationEndpoint())
+	if strings.Contains(discoveryDocument(t, idp), `"revocation_endpoint"`) {
+		t.Fatal("discovery advertises revocation_endpoint despite the opt-out")
+	}
+}
+
+func discoveryDocument(t *testing.T, idp *FakeIDPServer) string {
+	t.Helper()
+	resp, err := http.Get(idp.IssuerURL() + "/.well-known/openid-configuration")
+	if err != nil {
+		t.Fatalf("discovery: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read discovery: %v", err)
+	}
+	return string(body)
+}
+
+func postForm(t *testing.T, endpoint string, form url.Values) int {
+	t.Helper()
+	resp, err := http.PostForm(endpoint, form)
+	if err != nil {
+		t.Fatalf("post %s: %v", endpoint, err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode
+}
+
+func issueRefreshToken(t *testing.T, idp *FakeIDPServer, clientID string) string {
+	t.Helper()
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	authResp := authorizeRequest(t, idp, url.Values{
+		"client_id":             {clientID},
+		"redirect_uri":          {"http://127.0.0.1:0/callback"},
+		"response_type":         {"code"},
+		"state":                 {"s"},
+		"code_challenge":        {computeS256Challenge(verifier)},
+		"code_challenge_method": {"S256"},
+		"nonce":                 {"n"},
+	})
+	return exchangeCode(t, idp, authResp.Query().Get("code"), verifier, clientID).RefreshToken
+}
+
+func refreshGrantAccepted(t *testing.T, idp *FakeIDPServer, refreshToken, clientID string) bool {
+	t.Helper()
+	return postForm(t, idp.IssuerURL()+"/token", url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refreshToken},
+		"client_id":     {clientID},
+	}) == http.StatusOK
+}

@@ -143,12 +143,28 @@ succeed without an **offline** token. Keycloak may still return a normal refresh
 token tied to the browser SSO session, which the background loop can use until
 that online session policy ends.
 
-Keycloak offline tokens are deliberately independent of the browser SSO
-session and can remain valid after RP-Initiated Logout. go-pkceflow clears its
-in-memory state and asks the configured persistence backend to delete its copy;
-deletion failures are logged. It does not call Keycloak's revocation endpoint.
-Use Keycloak's offline-session expiry and administrative revocation controls
-when server-side revocation is part of your threat model.
+Keycloak offline tokens are deliberately independent of the browser SSO session
+and remain valid after RP-Initiated Logout on their own. go-pkceflow therefore
+posts the refresh token to Keycloak's `revocation_endpoint` (RFC 7009) during
+`Logout`, before the browser round trip, in addition to clearing in-memory state
+and asking the persistence backend to delete its copy. Deletion and revocation
+failures are both logged rather than returned.
+
+Revocation is best effort, so keep Keycloak's offline-session expiry and
+administrative revocation controls in place for the cases it cannot cover: a
+logout performed offline, or one where the endpoint is unreachable. Because
+local state is cleared first, a revocation that fails leaves the token valid at
+Keycloak and no longer revocable by this client.
+
+One consequence of revoking before the browser round trip: revocation may end
+the Keycloak session that the following `id_token_hint` names. Keycloak's
+handling of a hint whose session is already gone is version-dependent, and a
+realm that refuses to honour `post_logout_redirect_uri` in that state shows up as
+the logout flow waiting out `Config.LogoutTimeout`. Validate the pair against
+your realm rather than assuming it. Note that
+Keycloak's `revocation_endpoint_auth_methods_supported` does not list `none`;
+a public client authenticates with `client_id` alone, which Keycloak accepts in
+practice, but verify it against your realm.
 
 If your application deliberately does not need offline sessions, override
 `Config.Scopes` and omit `offline_access`. The resulting refresh-token lifetime

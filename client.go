@@ -2,6 +2,7 @@ package pkceflow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -31,8 +32,8 @@ type Client struct {
 	// lifecycleMu before stateCommitMu. Refresh registration acquires refreshMu
 	// before mu. State transitions acquire stateCommitMu before mu and may then
 	// enqueue events under eventMu. Persistence runs under stateCommitMu but never
-	// mu; discovery, browser flows, token endpoint work, and EventEmitter callbacks
-	// hold none of these locks.
+	// mu; discovery, browser flows, token endpoint work, token revocation, and
+	// EventEmitter callbacks hold none of these locks.
 	initMu        sync.Mutex
 	lifecycleMu   sync.Mutex
 	stateCommitMu sync.Mutex
@@ -47,6 +48,7 @@ type Client struct {
 	oauth2        *oauth2.Config
 
 	endSessionEndpoint  string
+	revocationEndpoint  string
 	refreshRun          *refreshLoopHandle
 	refreshAttempt      *refreshAttempt
 	refreshWake         chan struct{}
@@ -311,6 +313,7 @@ type initSnapshot struct {
 	verifier           *oidc.IDTokenVerifier
 	oauth2             *oauth2.Config
 	endSessionEndpoint string
+	revocationEndpoint string
 }
 
 // Init performs OIDC discovery and configures the OAuth2 client. Call this
@@ -354,21 +357,46 @@ func (c *Client) Init(ctx context.Context) error {
 		},
 	}
 
-	// Extract end_session_endpoint from discovery claims (for RP-Initiated Logout).
-	// If claims parsing fails, preserve the previously committed endpoint rather
+	// Extract the logout and revocation endpoints from discovery claims. If
+	// claims parsing fails, preserve the previously committed endpoint rather
 	// than accidentally clearing it — discovery otherwise succeeded.
-	var claims struct {
-		EndSessionEndpoint string `json:"end_session_endpoint"`
-	}
-	if err := provider.Claims(&claims); err == nil {
-		snapshot.endSessionEndpoint = claims.EndSessionEndpoint
-	} else {
-		c.mu.Lock()
-		snapshot.endSessionEndpoint = c.endSessionEndpoint
-		c.mu.Unlock()
-	}
+	//
+	// Decoded independently, one field at a time. encoding/json records a type
+	// mismatch and keeps going, returning the error only at the end, so a single
+	// shared struct would let a malformed revocation_endpoint discard a
+	// perfectly good end_session_endpoint and silently disable RP-Initiated
+	// Logout.
+	c.mu.Lock()
+	previousEndSession := c.endSessionEndpoint
+	previousRevocation := c.revocationEndpoint
+	c.mu.Unlock()
+	snapshot.endSessionEndpoint = discoveredEndpoint(
+		provider, "end_session_endpoint", previousEndSession,
+	)
+	snapshot.revocationEndpoint = discoveredEndpoint(
+		provider, "revocation_endpoint", previousRevocation,
+	)
 
 	return c.wrapInitError(c.commitInit(operation, snapshot))
+}
+
+// discoveredEndpoint reads one string endpoint from the discovery document,
+// falling back to the previously committed value when the claim is absent or not
+// a string.
+func discoveredEndpoint(provider *oidc.Provider, name, previous string) string {
+	var claims map[string]json.RawMessage
+	if err := provider.Claims(&claims); err != nil {
+		return previous
+	}
+	raw, ok := claims[name]
+	if !ok {
+		return ""
+	}
+	var endpoint string
+	if err := json.Unmarshal(raw, &endpoint); err != nil {
+		return previous
+	}
+	return endpoint
 }
 
 func (c *Client) beginInitOperation(ctx context.Context) *initOperation {
@@ -438,6 +466,7 @@ func (c *Client) commitInit(operation *initOperation, snapshot initSnapshot) err
 	c.verifier = snapshot.verifier
 	c.oauth2 = snapshot.oauth2
 	c.endSessionEndpoint = snapshot.endSessionEndpoint
+	c.revocationEndpoint = snapshot.revocationEndpoint
 	c.signalRefreshLoopLocked()
 	c.mu.Unlock()
 	c.initMu.Unlock()

@@ -204,6 +204,14 @@ logged rather than returned. An existing Microsoft browser or device session
 may still make a later login silent; RP-Initiated Logout is not a guarantee
 that every Microsoft session on the device is removed.
 
+Entra's v2.0 metadata does not advertise a `revocation_endpoint`, so
+go-pkceflow's RFC 7009 refresh-token revocation is silently skipped for Entra:
+logout is browser and local only, and a refresh token copied out of the token
+store before logout stays redeemable until Entra's own policy ends it. Use
+Entra's session and token revocation controls — Conditional Access, revoking
+sign-in sessions, or password change — when server-side revocation is part of
+your threat model.
+
 ## Troubleshooting
 
 - **Issuer mismatch during discovery**: use the Directory (tenant) ID v2 issuer,

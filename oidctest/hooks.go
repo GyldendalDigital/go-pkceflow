@@ -88,6 +88,8 @@ type Hooks struct {
 	jwks EndpointHook
 	// EndSession is called before the /end_session handler.
 	endSession EndpointHook
+	// Revocation is called before the /revoke handler.
+	revocation EndpointHook
 	// Discovery is called before the /.well-known/openid-configuration handler.
 	discovery EndpointHook
 	// Userinfo is called before the /userinfo handler.
@@ -124,6 +126,14 @@ func (h *Hooks) SetEndSessionHook(hook EndpointHook) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.endSession = hook
+}
+
+// SetRevocationHook sets a hook that runs before the revocation handler.
+// Pass nil to remove.
+func (h *Hooks) SetRevocationHook(hook EndpointHook) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.revocation = hook
 }
 
 // SetDiscoveryHook sets a hook that runs before the discovery handler.
@@ -180,6 +190,16 @@ func (h *Hooks) runEndSession(w http.ResponseWriter, r *http.Request) bool {
 		return hook(w, r)
 	}
 	return false
+}
+
+func (h *Hooks) runRevocation(w http.ResponseWriter, r *http.Request) bool {
+	h.mu.Lock()
+	hook := h.revocation
+	h.mu.Unlock()
+	if hook == nil {
+		return false
+	}
+	return hook(w, r)
 }
 
 func (h *Hooks) runDiscovery(w http.ResponseWriter, r *http.Request) bool {

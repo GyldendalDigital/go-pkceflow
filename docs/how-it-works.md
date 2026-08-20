@@ -158,11 +158,23 @@ from the login redirect URI. go-pkceflow supports configuring a distinct logout
 callback path, and correlates the logout round-trip with a `state` value just
 like login.
 
-Browser logout is not the same as token revocation. go-pkceflow clears its
-in-memory state and asks the configured persistence backend to delete its copy;
-a deletion failure is logged because browser/local logout otherwise continues.
-The library does not call a provider revocation endpoint. A provider may keep
-the discarded refresh/offline grant valid until its own expiry or
+Browser logout is not the same as token revocation, so go-pkceflow does both.
+It clears its in-memory state and asks the configured persistence backend to
+delete its copy; a deletion failure is logged because browser/local logout
+otherwise continues. When discovery advertised a `revocation_endpoint`, it also
+posts the refresh token there (RFC 7009) before the browser round trip, so the
+refresh token stops working rather than only the browser session ending. Access
+tokens already issued are not affected: RFC 7009 makes cascading a SHOULD and
+providers such as Keycloak do not honour it, so a bearer token already in hand
+stays valid until its own expiry. That matters because `offline_access` is requested by default and
+providers do not necessarily invalidate an offline grant at end-session.
+
+Revocation is best effort. It never changes what `Logout` returns, and it is
+skipped when the provider advertises no endpoint. If it fails - offline, a
+provider error, an endpoint that is not HTTPS - the local tokens are still gone,
+which also means the credential can no longer be revoked later. Without a
+reachable revocation endpoint a provider may keep the discarded refresh/offline
+grant valid until its own expiry or
 administrative revocation policy ends it.
 
 ## What if login and logout overlap?
@@ -186,7 +198,8 @@ button press instead of preempting the first command.
   for callbacks delivered by the application or framework host.
 - Encrypted, pluggable token storage.
 - Automatic background token refresh with an optional offline grace period.
-- RP-Initiated Logout with post-logout redirect correlation.
+- RP-Initiated Logout with post-logout redirect correlation, plus best-effort
+  RFC 7009 refresh-token revocation when the provider advertises an endpoint.
 - Reading ID token claims.
 - Testing without a real IdP (the `oidctest` package).
 

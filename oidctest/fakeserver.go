@@ -67,6 +67,7 @@ type FakeIDPServer struct {
 	refreshSubject  *string                 // when set, overrides refresh ID token subject
 	refreshRawID    *string                 // when set, refresh responses use this raw id_token
 	lenient         bool                    // when true, disables strict protocol checks
+	omitRevocation  bool                    // when true, discovery omits revocation_endpoint
 	jwksError       *int                    // when set, JWKS endpoint returns this HTTP status code
 	forceIssuer     *string                 // when set, overrides the issuer in ID tokens
 	forceAudience   *string                 // when set, overrides the audience in ID tokens
@@ -183,6 +184,12 @@ func WithCodeTTL(d time.Duration) Option {
 	return func(s *FakeIDPServer) { s.codeTTL = d }
 }
 
+// WithOmitRevocationEndpoint makes discovery omit revocation_endpoint, modeling
+// a provider that does not implement RFC 7009 (for example Microsoft Entra ID).
+func WithOmitRevocationEndpoint() Option {
+	return func(s *FakeIDPServer) { s.omitRevocation = true }
+}
+
 // WithLenientMode disables strict protocol enforcement. In lenient mode, the
 // server does not require PKCE, does not validate redirect URIs against the
 // registered list, and does not enforce code expiry. Use this only for legacy
@@ -233,6 +240,7 @@ func NewFakeIDP(t *testing.T, opts ...Option) *FakeIDPServer {
 	mux.HandleFunc("GET /jwks", s.wrapHandler("/jwks", s.Hooks.runJWKS, s.handleJWKS))
 	mux.HandleFunc("GET /end_session", s.wrapHandler("/end_session", s.Hooks.runEndSession, s.handleEndSession))
 	mux.HandleFunc("GET /userinfo", s.wrapHandler("/userinfo", s.Hooks.runUserinfo, s.handleUserinfo))
+	mux.HandleFunc("POST /revoke", s.wrapHandler("/revoke", s.Hooks.runRevocation, s.handleRevoke))
 
 	s.Server = httptest.NewServer(mux)
 	t.Cleanup(s.Server.Close)
@@ -469,8 +477,38 @@ func (s *FakeIDPServer) handleDiscovery(w http.ResponseWriter, _ *http.Request) 
 		"token_endpoint_auth_methods_supported": []string{"none", "client_secret_post"},
 		"code_challenge_methods_supported":      []string{"S256"},
 	}
+	s.mu.Lock()
+	omitRevocation := s.omitRevocation
+	s.mu.Unlock()
+	if !omitRevocation {
+		doc["revocation_endpoint"] = issuer + "/revoke"
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(doc) //nolint:errcheck // response write failure surfaces as client-side error in test
+}
+
+// handleRevoke implements RFC 7009 token revocation. It really deletes the
+// refresh token, so a test can assert the credential stopped working rather than
+// merely that a request was recorded.
+//
+// Per RFC 7009 section 2.2 an unknown or already-revoked token still returns 200,
+// so a 200 alone never proves anything was revoked.
+func (s *FakeIDPServer) handleRevoke(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		tokenError(w, "invalid_request", "malformed form body")
+		return
+	}
+	if r.Form.Get("token") == "" {
+		tokenError(w, "invalid_request", "token parameter is required")
+		return
+	}
+
+	s.mu.Lock()
+	delete(s.refreshTokens, r.Form.Get("token"))
+	s.mu.Unlock()
+
+	w.WriteHeader(http.StatusOK)
 }
 
 // handleAuthorize simulates the authorization endpoint.
