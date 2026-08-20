@@ -70,6 +70,8 @@ type FakeIDPServer struct {
 	jwksError       *int                    // when set, JWKS endpoint returns this HTTP status code
 	forceIssuer     *string                 // when set, overrides the issuer in ID tokens
 	forceAudience   *string                 // when set, overrides the audience in ID tokens
+	forceAudiences  *[]string               // when set, overrides aud with a multi-valued list
+	forceAzpJSON    *string                 // when set, injects this raw JSON as the azp claim
 	forceExpiry     *time.Time              // when set, overrides the expiry in ID tokens
 	forceNotBefore  *time.Time              // when set, overrides nbf in ID tokens
 	nowFunc         func() time.Time
@@ -366,8 +368,10 @@ func (s *FakeIDPServer) SetForceIssuer(issuer string) {
 	}
 }
 
-// SetForceAudience overrides the audience claim in subsequently issued ID tokens.
-// Pass empty string to revert to the default (client ID).
+// SetForceAudience overrides the audience claim in subsequently issued ID tokens
+// with a single value. Pass empty string to revert to the default (client ID).
+//
+// SetForceAudiences overrides this while it is set.
 func (s *FakeIDPServer) SetForceAudience(aud string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -376,6 +380,48 @@ func (s *FakeIDPServer) SetForceAudience(aud string) {
 	} else {
 		s.forceAudience = &aud
 	}
+}
+
+// SetForceAudiences overrides the ID token "aud" claim with a multi-valued list,
+// the shape that makes an "azp" claim mandatory under OIDC Core 3.1.3.7. Pass no
+// arguments to clear.
+//
+// It takes precedence over SetForceAudience while set.
+func (s *FakeIDPServer) SetForceAudiences(auds ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(auds) == 0 {
+		s.forceAudiences = nil
+		return
+	}
+	list := append([]string(nil), auds...)
+	s.forceAudiences = &list
+}
+
+// SetForceAzp adds an "azp" (authorized party) claim to issued ID tokens. Pass
+// an empty string to clear.
+func (s *FakeIDPServer) SetForceAzp(azp string) {
+	if azp == "" {
+		s.SetForceAzpRawJSON("")
+		return
+	}
+	encoded, err := json.Marshal(azp)
+	if err != nil { // unreachable for a string
+		panic("oidctest: marshal azp: " + err.Error())
+	}
+	s.SetForceAzpRawJSON(string(encoded))
+}
+
+// SetForceAzpRawJSON injects raw JSON as the "azp" claim, so a test can present
+// a well-formed token whose azp is not a string. Pass an empty string to clear.
+func (s *FakeIDPServer) SetForceAzpRawJSON(raw string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if raw == "" {
+		s.forceAzpJSON = nil
+		return
+	}
+	s.forceAzpJSON = &raw
 }
 
 // SetForceExpiry overrides the exp claim in subsequently issued ID tokens.
@@ -809,6 +855,15 @@ func (s *FakeIDPServer) signIDToken(subject, audience, nonce string, now time.Ti
 	if s.forceAudience != nil {
 		audience = *s.forceAudience
 	}
+	audiences := jwt.Audience{audience}
+	if s.forceAudiences != nil {
+		audiences = jwt.Audience(append([]string(nil), *s.forceAudiences...))
+	}
+	var azpJSON *string
+	if s.forceAzpJSON != nil {
+		raw := *s.forceAzpJSON
+		azpJSON = &raw
+	}
 	expiry := now.Add(ttl)
 	if s.forceExpiry != nil {
 		expiry = *s.forceExpiry
@@ -823,21 +878,26 @@ func (s *FakeIDPServer) signIDToken(subject, audience, nonce string, now time.Ti
 	claims := jwt.Claims{
 		Issuer:    issuer,
 		Subject:   subject,
-		Audience:  jwt.Audience{audience},
+		Audience:  audiences,
 		IssuedAt:  jwt.NewNumericDate(now),
 		Expiry:    jwt.NewNumericDate(expiry),
 		NotBefore: jwt.NewNumericDate(notBefore),
 	}
 
 	type extraClaims struct {
-		Nonce string `json:"nonce,omitempty"`
-		Email string `json:"email,omitempty"`
-		Name  string `json:"name,omitempty"`
+		Nonce string           `json:"nonce,omitempty"`
+		Email string           `json:"email,omitempty"`
+		Name  string           `json:"name,omitempty"`
+		Azp   *json.RawMessage `json:"azp,omitempty"`
 	}
 	extra := extraClaims{
 		Nonce: nonce,
 		Email: "test@example.com",
 		Name:  "Test User",
+	}
+	if azpJSON != nil {
+		raw := json.RawMessage(*azpJSON)
+		extra.Azp = &raw
 	}
 
 	token, err := jwt.Signed(signer).Claims(claims).Claims(extra).Serialize()

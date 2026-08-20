@@ -48,6 +48,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documentation: refreshed the stale pre-1.0 release gate status (#88) and
   aligned the logout callback examples with the CLI default (#89).
 
+### Security
+- ID token `azp` (authorized party) validation on both login and refresh, per
+  OIDC Core 3.1.3.7. go-oidc only checks that the client ID appears in `aud`, so
+  an ID token issued to a *different* client was previously accepted. A present
+  `azp` must equal the configured client ID; an absent one is accepted for a
+  single-audience token and rejected when the token carries more than one
+  audience, where the spec requires it. A mismatch is logged at Warn with both
+  client IDs so a provider misconfiguration is diagnosable in the field.
+
+### Added
+- `oidctest`: `SetForceAzp`, `SetForceAzpRawJSON`, and `SetForceAudiences` for
+  adversarial authorized-party and multi-audience ID token testing.
+
 ## [v0.9.0-beta.10] - 2026-08-11
 
 ### Added

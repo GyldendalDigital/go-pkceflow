@@ -2,10 +2,12 @@ package oidctest
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -905,4 +907,84 @@ func exchangeCode(t *testing.T, idp *FakeIDPServer, code, verifier, clientID str
 		t.Fatalf("decode tokens: %v", err)
 	}
 	return tokens
+}
+
+// idTokenClaims decodes an ID token payload without verifying it, so a fixture
+// test can assert exactly which claims the fake IdP emitted.
+func idTokenClaims(t *testing.T, idToken string) map[string]any {
+	t.Helper()
+	parts := strings.Split(idToken, ".")
+	if len(parts) != 3 {
+		t.Fatalf("ID token has %d segments, want 3", len(parts))
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("decode ID token payload: %v", err)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		t.Fatalf("parse ID token claims: %v", err)
+	}
+	return claims
+}
+
+// issueIDToken drives a full authorization-code exchange and returns the ID
+// token, so the claim-forcing knobs can be asserted on real signed output.
+func issueIDToken(t *testing.T, idp *FakeIDPServer, clientID string) string {
+	t.Helper()
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	authResp := authorizeRequest(t, idp, url.Values{
+		"client_id":             {clientID},
+		"redirect_uri":          {"http://127.0.0.1:0/callback"},
+		"response_type":         {"code"},
+		"state":                 {"s"},
+		"code_challenge":        {computeS256Challenge(verifier)},
+		"code_challenge_method": {"S256"},
+		"nonce":                 {"n"},
+	})
+	return exchangeCode(t, idp, authResp.Query().Get("code"), verifier, clientID).IDToken
+}
+
+func TestFakeIDP_ForceAzp(t *testing.T) {
+	idp := NewFakeIDP(t, WithClientID("my-app"))
+
+	if claims := idTokenClaims(t, issueIDToken(t, idp, "my-app")); claims["azp"] != nil {
+		t.Fatalf("azp = %v, want absent by default", claims["azp"])
+	}
+
+	idp.SetForceAzp("other-app")
+	if got := idTokenClaims(t, issueIDToken(t, idp, "my-app"))["azp"]; got != "other-app" {
+		t.Fatalf("azp = %v, want %q", got, "other-app")
+	}
+
+	// Raw JSON lets a test present a well-formed token whose azp is not a string.
+	idp.SetForceAzpRawJSON(`1234`)
+	if got := idTokenClaims(t, issueIDToken(t, idp, "my-app"))["azp"]; got != float64(1234) {
+		t.Fatalf("azp = %#v, want the number 1234", got)
+	}
+
+	idp.SetForceAzp("")
+	if claims := idTokenClaims(t, issueIDToken(t, idp, "my-app")); claims["azp"] != nil {
+		t.Fatalf("azp = %v, want absent after clearing", claims["azp"])
+	}
+}
+
+func TestFakeIDP_ForceAudiences(t *testing.T) {
+	idp := NewFakeIDP(t, WithClientID("my-app"))
+	idp.SetForceAudiences("my-app", "https://api.example.com")
+
+	claims := idTokenClaims(t, issueIDToken(t, idp, "my-app"))
+	auds, ok := claims["aud"].([]any)
+	if !ok {
+		t.Fatalf("aud = %#v, want a list", claims["aud"])
+	}
+	if len(auds) != 2 || auds[0] != "my-app" || auds[1] != "https://api.example.com" {
+		t.Fatalf("aud = %#v, want both audiences in order", auds)
+	}
+
+	idp.SetForceAudiences()
+	single := idTokenClaims(t, issueIDToken(t, idp, "my-app"))
+	if single["aud"] != "my-app" {
+		t.Fatalf("aud = %#v, want the single client ID after clearing", single["aud"])
+	}
 }

@@ -136,8 +136,11 @@ Login must return a signed ID token whose:
 - issuer exactly matches the discovered issuer;
 - audience contains the configured client ID;
 - signature validates with the discovery JWKS;
-- expiry is valid; and
-- `nonce` claim matches the nonce from the authorization request.
+- expiry is valid;
+- `nonce` claim matches the nonce from the authorization request; and
+- `azp` claim, if present, equals the configured client ID. go-pkceflow requires
+  `azp` when `aud` carries more than one value, as OIDC Core 3.1.3.7 specifies,
+  and accepts its absence for a single-audience token.
 
 During refresh, the provider may omit `id_token`; go-pkceflow then retains the
 previously verified one. If the provider returns a new ID token, it is verified
@@ -227,6 +230,14 @@ Verify:
   request's nonce in the ID token.
 - **Login works but refresh does not**: check offline-access policy, requested
   scopes, refresh-token rotation, expiry, and revocation logs.
+- **`azp claim does not authorize this client`**: the provider issued an ID token
+  whose authorized party is a different client, or a multi-audience token with no
+  `azp`. Grep the logs for the matching `WARN` line: `ID token azp claim names a
+  different client` (carrying `configured_client_id` and `received_azp`
+  attributes), `ID token has multiple audiences but no azp claim`, or `ID token
+  azp claim is not a string`. The log is the reliable signal, because a consuming
+  application's error mapping may flatten the returned error into a generic
+  failure. Check whether the provider adds extra audiences to ID tokens.
 - **Logout is local only**: check discovery for `end_session_endpoint` and
   register the post-logout redirect URI.
 
