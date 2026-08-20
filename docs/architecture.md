@@ -178,8 +178,10 @@ opaque to clients per RFC 6750.
    public `client_id` in the form body without a secret or HTTP Basic probe
 7. Client validates the ID token issuer, audience, signature, and expiry via
    the discovery JWKS
-8. Client validates the ID token nonce claim (constant-time compare)
-9. Client persists token state and emits the logged-in event
+8. Client validates the ID token `azp` (authorized party) claim when present,
+   and requires it when the token carries more than one audience
+9. Client validates the ID token nonce claim (constant-time compare)
+10. Client persists token state and emits the logged-in event
 
 ## Token Lifecycle
 
@@ -274,6 +276,9 @@ additional TokenPersistence implementation without changing the core API.
   with registered private-use schemes supported at weaker interception
   resistance
 - Refreshed ID tokens are verified and cannot silently change the session subject
+- ID token `azp` is validated on login and refresh: go-oidc only checks that the
+  client ID appears in `aud`, so a token issued to another client, or a
+  multi-audience token naming no authorized party, would otherwise be accepted
 - Extra parameter maps cannot override library-owned OAuth/OIDC/PKCE fields or
   introduce a client secret
 

@@ -170,7 +170,7 @@ func (c *Client) Login(ctx context.Context) error {
 		)
 	}
 
-	idToken, err := verifier.Verify(ctx, rawIDToken)
+	idToken, err := c.verifyIDToken(ctx, verifier, rawIDToken)
 	if err != nil {
 		return c.lifecycleOperationError(
 			operation,

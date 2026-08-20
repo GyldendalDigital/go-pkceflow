@@ -407,7 +407,7 @@ func (c *Client) performRefresh(
 	if idToken == "" {
 		idToken = snapshot.IDToken
 	} else {
-		verified, err := verifier.Verify(ctx, idToken)
+		verified, err := c.verifyIDToken(ctx, verifier, idToken)
 		if err != nil {
 			state, refreshErr := c.refreshFailure(
 				revision,
