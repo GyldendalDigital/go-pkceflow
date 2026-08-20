@@ -20,7 +20,8 @@ or desktop dogfooding.
 - Deterministic per-client ordering for overlapping login and logout commands
 - Framework-agnostic mobile callback handling for delivered Universal Links,
   App Links, and custom-scheme URLs
-- RP-Initiated Logout with separate, correlated post-logout redirect URIs
+- RP-Initiated Logout with separate, correlated post-logout redirect URIs, plus
+  best-effort RFC 7009 refresh-token revocation
 - ID token claims decoding (`client.Claims()`)
 - Encrypted token persistence (AES-256-GCM filestore, pluggable interface)
 - Background token refresh with DHCP-style lifetime scheduling

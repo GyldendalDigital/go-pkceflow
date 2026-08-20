@@ -60,6 +60,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `oidctest`: `SetForceAzp`, `SetForceAzpRawJSON`, and `SetForceAudiences` for
   adversarial authorized-party and multi-audience ID token testing.
+- Best-effort RFC 7009 refresh-token revocation during `Logout`, when discovery
+  advertises a `revocation_endpoint`. RP-Initiated Logout ends the browser
+  session but does not necessarily invalidate an offline grant, and
+  `offline_access` is requested by default, so previously a copy of the token
+  store taken before logout could stay redeemable for the provider's whole
+  offline-session window. The POST runs after the local commit and before the
+  browser round trip, carries `token_type_hint=refresh_token` and the public
+  `client_id`, is bounded by its own short timeout so it cannot starve the
+  browser logout, and never follows redirects, so a discovery document cannot
+  replay a refresh token to another host. Failures are logged without token or
+  response-body text and never change what `Logout` returns. A logout superseded
+  by a newer `Login` skips revocation, because session-bound refresh tokens make
+  it possible to tear down the session that `Login` just established. Providers
+  without RFC 7009 support, such as Microsoft Entra ID, are unaffected.
+- `oidctest`: a `/revoke` endpoint that really invalidates the refresh token,
+  `revocation_endpoint` in the discovery document,
+  `Hooks.SetRevocationHook`, and `WithOmitRevocationEndpoint`.
 
 ## [v0.9.0-beta.10] - 2026-08-11
 

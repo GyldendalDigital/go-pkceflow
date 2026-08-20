@@ -3,10 +3,16 @@ package pkceflow
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/coreos/go-oidc/v3/oidc"
+	"golang.org/x/oauth2"
 )
 
 // graceTestClient builds a client whose access token has expired but whose grace
@@ -232,18 +238,37 @@ func TestCredentialRefusalSurvivesRestart(t *testing.T) {
 // session was revoked and must not hard-log-out a live user.
 func TestCredentialRefusalAfterInconclusiveAttemptKeepsGrace(t *testing.T) {
 	emitter := &recordingTestEmitter{}
-	store := &memoryStore{}
-	client, state, endpoint := graceTestClient(t, store, emitter)
-	endpoint.oauthError = "invalid_grant"
+	// A dedicated endpoint, not the shared gate: the first attempt must be
+	// answerless. Letting an invalid_grant response race the cancellation would
+	// make the outcome known, which is deliberately not inconclusive.
+	var requests atomic.Int32
+	entered := make(chan struct{}, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 1 {
+			entered <- struct{}{}
+			// Abandoned in flight and never answered. Bounded so a stuck
+			// connection cannot wedge httptest.Server.Close at cleanup; either
+			// way the client gets no OAuth error code, which is the point.
+			select {
+			case <-r.Context().Done():
+			case <-time.After(time.Second):
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":"invalid_grant"}`)
+	}))
+	t.Cleanup(server.Close)
 
-	// First attempt: abandoned in flight, outcome never learned.
+	client, state := newGraceClientForEndpoint(t, server.URL, emitter)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan string, 1)
 	go func() { result <- client.AccessToken(ctx) }()
-	waitForTestSignal(t, endpoint.entered, "refresh did not reach the token endpoint")
+	waitForTestSignal(t, entered, "refresh did not reach the token endpoint")
 	cancel()
 	waitForTestString(t, result, "AccessToken did not return after cancellation")
-	endpoint.unblock()
 	waitForInconclusiveRefresh(t, client)
 
 	// Second attempt: refused, but ambiguously so. Grace must hold.
@@ -256,7 +281,67 @@ func TestCredentialRefusalAfterInconclusiveAttemptKeepsGrace(t *testing.T) {
 	if status := client.AuthStatus(); !status.GraceMode || !status.CanUseApp {
 		t.Fatalf("AuthStatus = %+v, want grace retained", status)
 	}
-	assertGenerationParked(t, client, endpoint)
+
+	client.mu.Lock()
+	parked := client.refreshPermanentlyBlockedLocked()
+	client.mu.Unlock()
+	if !parked {
+		t.Fatal("generation is not parked after an ambiguous refusal")
+	}
+	before := requests.Load()
+	for range 3 {
+		client.AccessToken(context.Background())
+	}
+	if after := requests.Load(); after != before {
+		t.Fatalf(
+			"token endpoint requests went from %d to %d; the dead token is being re-presented",
+			before, after,
+		)
+	}
+}
+
+// newGraceClientForEndpoint builds an expired-but-in-grace client whose token
+// endpoint is the given URL.
+func newGraceClientForEndpoint(
+	t *testing.T,
+	tokenURL string,
+	emitter EventEmitter,
+) (*Client, TokenState) {
+	t.Helper()
+
+	authenticatedAt := time.Now().UTC().Truncate(time.Second)
+	state := TokenState{
+		AccessToken:  "access-old",
+		RefreshToken: "refresh-old",
+		IDToken:      "id-token-old",
+		ExpiresAt:    authenticatedAt.Add(time.Minute),
+		LastAuthAt:   authenticatedAt,
+	}
+	store := &memoryStore{}
+	if err := store.Save(state); err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+
+	client := &Client{
+		config:        Config{GracePeriod: 30 * 24 * time.Hour},
+		store:         store,
+		emitter:       emitter,
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		clock:         newManualRefreshClock(authenticatedAt.Add(2 * time.Minute)),
+		state:         state,
+		stateRevision: 1,
+		lifecycleFlow: make(chan struct{}, 1),
+		oauth2: &oauth2.Config{
+			ClientID: "test-client",
+			Endpoint: oauth2.Endpoint{
+				TokenURL:  tokenURL,
+				AuthStyle: oauth2.AuthStyleInParams,
+			},
+		},
+		provider: &oidc.Provider{},
+		verifier: &oidc.IDTokenVerifier{},
+	}
+	return client, state
 }
 
 // TestCredentialRefusalOfSupersededTokenKeepsGrace covers the cross-process

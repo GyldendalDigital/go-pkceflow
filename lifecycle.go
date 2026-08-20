@@ -64,6 +64,19 @@ func (c *Client) finishLifecycleOperation(operation *lifecycleOperation) {
 	operation.cancel()
 }
 
+// lifecycleOperationOwned reports whether operation is still the Client's
+// current operation, ignoring context cancellation.
+//
+// It exists for post-commit work that must still run for a cancelled caller.
+// lifecycleOperationCurrent conflates "superseded by a newer operation" with
+// "the caller's context ended", and a Logout whose context is already cancelled
+// — "log out and quit" — must still revoke its refresh token.
+func (c *Client) lifecycleOperationOwned(operation *lifecycleOperation) bool {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	return c.lifecycleOperation == operation
+}
+
 func (c *Client) lifecycleOperationCurrent(operation *lifecycleOperation) bool {
 	c.lifecycleMu.Lock()
 	defer c.lifecycleMu.Unlock()

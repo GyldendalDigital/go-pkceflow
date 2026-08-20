@@ -104,7 +104,13 @@ active operation.
 
 Logout is the local security boundary. It atomically supersedes an older Login,
 clears memory, attempts persistent deletion, and queues `oidcauth:logged-out`
-before any RP-Initiated Logout browser round trip. Concurrent Logout calls
+before any RP-Initiated Logout browser round trip. It then revokes the refresh
+token (RFC 7009) when discovery advertised an endpoint, still ahead of the
+browser round trip because that round trip is user-interactive and unbounded.
+Revocation holds no state or persistence locks, is bounded by its own short
+timeout, and is skipped when a newer Login has already superseded the logout -
+on providers whose refresh tokens are session-bound, revoking the old token
+could otherwise tear down the session that Login just established. Concurrent Logout calls
 coalesce so only one local event and one provider round trip are attempted. A
 newer Login can cancel a pending RP callback wait, but it cannot recall a logout
 page already opened at the provider.
@@ -276,6 +282,15 @@ additional TokenPersistence implementation without changing the core API.
   with registered private-use schemes supported at weaker interception
   resistance
 - Refreshed ID tokens are verified and cannot silently change the session subject
+- Logout makes a best-effort RFC 7009 revocation of the refresh token when the
+  provider advertises an endpoint, so a copy of the token store taken before
+  logout stops being redeemable. Already-issued access tokens are unaffected and
+  live to their own expiry. Because local state is cleared first, a revocation
+  that fails leaves the token valid at the provider and no longer revocable by
+  anyone, so provider-side session expiry remains part of the threat model. The
+  endpoint must be absolute, free of credentials or a fragment, and HTTPS unless
+  the issuer itself is plaintext, and redirects are never followed, so a
+  discovery document cannot redirect a refresh token to another host
 - ID token `azp` is validated on login and refresh: go-oidc only checks that the
   client ID appears in `aud`, so a token issued to another client, or a
   multi-audience token naming no authorized party, would otherwise be accepted

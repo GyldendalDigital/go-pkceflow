@@ -44,8 +44,16 @@ The discovery document must provide:
 `end_session_endpoint` is optional. Without it, `Logout` still clears in-memory
 state, attempts deletion through `TokenPersistence`, and emits the logged-out
 event, but cannot end the provider's browser session. Persistence deletion
-failures are logged rather than returned. RP-Initiated Logout is separate from
-token revocation: the library does not call a provider revocation endpoint.
+failures are logged rather than returned.
+
+`revocation_endpoint` is also optional. When discovery advertises one, `Logout`
+posts the refresh token to it with `token_type_hint=refresh_token` and the public
+`client_id`, before the browser round trip. The endpoint must be absolute and
+HTTPS (plain HTTP is accepted only when the issuer itself is plain HTTP, for a
+local development provider), and redirects are not followed, so a refresh token
+is never replayed to another host. Revocation is best effort and never changes
+Logout's result. Providers without RFC 7009 support, such as Microsoft Entra ID,
+simply skip this step.
 
 Use HTTPS for a deployed issuer. Plain HTTP is appropriate only for a local
 development provider on a trusted machine.
