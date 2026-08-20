@@ -142,7 +142,9 @@ Login must return a signed ID token whose:
 During refresh, the provider may omit `id_token`; go-pkceflow then retains the
 previously verified one. If the provider returns a new ID token, it is verified
 and must have the same non-empty `sub` claim as the current session. A changed
-or unverifiable identity fails closed and bypasses grace mode.
+or unverifiable identity fails closed and bypasses grace mode. A provider that
+refuses the refresh token with `invalid_grant` likewise ends grace, while a
+refused client registration does not.
 
 Access tokens are opaque to go-pkceflow. Their audience, format, and API
 authorization rules belong to the provider and resource server.

@@ -160,6 +160,12 @@ const tokenExpiryBuffer = 30 * time.Second
 
 // AuthStatus reports the current authentication state.
 // No network calls; purely based on in-memory state and config.
+//
+// A session the provider has refused, and one that failed a session-integrity
+// check, both report the zero result: not valid, not in grace, not usable. That
+// is indistinguishable from never having authenticated. To tell the two apart,
+// call Claims: it still succeeds for a refused session, naming the user a
+// re-authentication prompt should address.
 func (c *Client) AuthStatus() AuthStatusResult {
 	c.mu.Lock()
 	defer c.mu.Unlock()

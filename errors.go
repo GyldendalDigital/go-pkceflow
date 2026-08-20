@@ -64,18 +64,48 @@ func (e *AuthError) Error() string {
 	return fmt.Sprintf("pkceflow: auth error: %s", e.Code)
 }
 
-// permanentErrorCodes are OAuth2 error codes that indicate the refresh token
-// is permanently invalid and retrying will not help.
+// permanentErrorCodes are OAuth2 error codes that indicate retrying the refresh
+// will not help. They do not all mean the same thing: see
+// isCredentialRefusedError for the narrower question of whether the provider
+// refused the credential itself.
 var permanentErrorCodes = map[string]bool{
 	"invalid_grant":       true,
 	"invalid_client":      true,
 	"unauthorized_client": true,
 }
 
-// IsPermanentError reports whether err represents a permanent OAuth2 or
-// session-integrity error that cannot be resolved by retrying. When true, the
-// refresh token is invalid (revoked, expired, or the client is no longer
-// authorized), or the refreshed session no longer matches the trusted session.
+// credentialRefusedCode is the OAuth2 error code by which a provider refuses
+// the presented credential (RFC 6749 section 5.2): the refresh token is
+// revoked, expired, or otherwise no longer redeemable.
+//
+// The other permanent codes are deliberately excluded. invalid_client and
+// unauthorized_client refuse the *client registration*, not the token, and say
+// nothing about whether the user's session is still valid. Ending grace for
+// those would sign the user out while the follow-up Login also fails at the
+// authorization endpoint, which is the dead end grace exists to prevent.
+const credentialRefusedCode = "invalid_grant"
+
+// isCredentialRefusedError reports whether err is a provider's authoritative
+// refusal of the refresh token itself. Grace covers "the app could not ask";
+// this is "the app asked and was refused", which grace must not extend.
+//
+// A session-integrity failure is never reported here: it fails closed on its
+// own path and must not be reclassified as a credential refusal.
+func isCredentialRefusedError(err error) bool {
+	if isSessionIntegrityError(err) {
+		return false
+	}
+	var authErr *AuthError
+	if errors.As(err, &authErr) {
+		return authErr.Code == credentialRefusedCode
+	}
+	return false
+}
+
+// IsPermanentError reports whether err represents an OAuth2 or
+// session-integrity error that retrying cannot resolve, so the refresh token
+// generation should stop being retried. It does not distinguish a refused
+// credential from a refused client registration; only the former ends grace.
 func IsPermanentError(err error) bool {
 	if errors.Is(err, errSessionIntegrity) ||
 		errors.Is(err, errRefreshPermanentlyBlocked) {

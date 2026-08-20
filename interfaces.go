@@ -90,6 +90,9 @@ type TokenPersistence interface {
 // state or persistence locks while invoking the implementation. An event queued
 // while another callback is active may be delivered after its originating
 // Client operation returns.
+//
+// Implementations must return promptly. A slow Emit delays the operation that
+// produced the event, including an AccessToken call whose refresh was refused.
 type EventEmitter interface {
 	// Emit sends a named event with optional associated data.
 	Emit(event string, data any)

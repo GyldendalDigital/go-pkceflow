@@ -686,8 +686,12 @@ func TestRefreshSharesFailedAttemptPerRevision(t *testing.T) {
 		wantPermanent bool
 	}{
 		{
+			// invalid_client, not invalid_grant: both are permanent, but a
+			// refused credential commits a refused generation, so the "later
+			// refresh sees the same parked generation" assertion below no longer
+			// applies to it. Credential refusal is covered in grace_test.go.
 			name:          "permanent OAuth failure",
-			oauthError:    "invalid_grant",
+			oauthError:    "invalid_client",
 			wantPermanent: true,
 		},
 		{

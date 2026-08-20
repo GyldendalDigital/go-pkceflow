@@ -60,6 +60,12 @@ type refreshLoopSchedule struct {
 	disposition    refreshLoopDisposition
 	eventAt        time.Time
 	eventEmitted   bool
+
+	// inconclusive records that an attempt for this generation was abandoned
+	// after the request went out, so the provider's answer is unknown. A later
+	// credential refusal for the same generation is then ambiguous and must not
+	// be treated as an authoritative revocation.
+	inconclusive bool
 }
 
 type refreshLoopHandle struct {
@@ -76,10 +82,13 @@ type refreshLoopHandle struct {
 // starts a refresh at or after the access-token expiry.
 //
 // Expiry parks that token generation without clearing state, forcing Login, or
-// emitting EventSessionExpired. A permanent OAuth error also parks the
+// emitting EventSessionExpired. A refused client registration also parks the
 // generation and emits that event once grace is unavailable or exhausted. A
-// session-integrity error parks and emits immediately despite grace. New Login,
-// RestoreSession, or successful on-demand refresh state wakes the supervisor.
+// session-integrity error parks and emits immediately despite grace. A provider
+// refusing the refresh token itself instead replaces the generation with a
+// refused session, which withdraws grace immediately and parks quietly because
+// it holds no refresh token. New Login, RestoreSession, or successful on-demand
+// refresh state wakes the supervisor.
 //
 // If saving a successful Login or refresh reports an error, the committed state
 // remains authoritative in memory. While this loop is active, persistence is
@@ -403,11 +412,11 @@ func (c *Client) doRefresh(
 		return refreshLoopAttemptExpiredBeforeStart
 	}
 	if isSessionIntegrityError(err) {
-		c.logger.Debug("refresh loop: session integrity failure", "error", err)
+		c.logger.Warn("refresh loop: session integrity failure", "error", err)
 		return refreshLoopAttemptIntegrity
 	}
 	if IsPermanentError(err) {
-		c.logger.Debug("refresh loop: permanent refresh failure", "error", err)
+		c.logger.Warn("refresh loop: permanent refresh failure", "error", err)
 		return refreshLoopAttemptPermanent
 	}
 	if ctx.Err() != nil {
@@ -485,6 +494,23 @@ func (c *Client) sessionExpiredEventTime(
 		}
 	}
 	return now
+}
+
+// markRefreshInconclusiveLocked records that this generation had an attempt
+// whose outcome is unknown. c.mu must be held.
+func (c *Client) markRefreshInconclusiveLocked(revision uint64) {
+	if c.stateRevision != revision {
+		return
+	}
+	c.refreshScheduleLocked(revision).inconclusive = true
+}
+
+// refreshInconclusiveLocked reports whether this generation has an attempt whose
+// outcome was never learned. c.mu must be held.
+func (c *Client) refreshInconclusiveLocked(revision uint64) bool {
+	return c.refreshSchedule.valid &&
+		c.refreshSchedule.revision == revision &&
+		c.refreshSchedule.inconclusive
 }
 
 // blockRefreshIntegrity makes a manual refresh integrity failure fail closed
