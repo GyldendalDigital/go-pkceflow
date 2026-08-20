@@ -24,7 +24,8 @@ type AuthStatusResult struct {
 	Valid bool `json:"valid"`
 
 	// GraceMode is true when the token is expired but within the configured
-	// grace period. Only possible when Config.GracePeriod > 0.
+	// grace period. Only possible when Config.GracePeriod > 0, and never true
+	// once the provider has refused the refresh token itself.
 	GraceMode bool `json:"grace_mode"`
 
 	// GraceDaysLeft is the number of days remaining in the grace period.

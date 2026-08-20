@@ -34,6 +34,14 @@ type Config struct {
 	// GracePeriod allows the app to continue functioning after token refresh
 	// fails, for up to this duration since the last successful login or token
 	// refresh. Zero means grace mode is disabled.
+	//
+	// Grace covers "the app could not reach the provider": transport failures,
+	// timeouts, 5xx responses, and a refused client registration. It does not
+	// cover "the app asked and was refused": when the provider rejects the
+	// refresh token itself with invalid_grant, the session ends at once
+	// regardless of how much of this period remains — unless that refusal cannot
+	// be trusted as authoritative, because an earlier attempt was abandoned in
+	// flight or stored state holds a newer refresh token.
 	GracePeriod time.Duration
 
 	// LoginTimeout is the maximum time to wait for the user to complete login.

@@ -129,8 +129,15 @@ event. Logout or a newer Login safely supersedes stale retry work.
 Until one of those Save attempts returns success, the next process start may
 find the previous tokens, the new tokens, or no readable tokens, depending on
 where storage failed. A stale rotated token may require reauthentication, but
-expiry or recovery failure never opens the browser automatically. Grace still
-controls whether offline app use is allowed.
+expiry or recovery failure never opens the browser automatically.
+
+Grace controls whether offline app use is allowed, with one exception: if the
+provider is reachable and refuses the refresh token itself, the session ends
+immediately rather than coasting to the end of the grace window. Because a
+provider that rotates refresh tokens gives that same answer for a merely
+superseded token, go-pkceflow first checks whether the stored state holds a newer
+refresh token, and whether an earlier attempt for this generation was abandoned
+in flight. Either makes the refusal inconclusive and grace is kept.
 
 go-pkceflow requests `openid profile email offline_access` by default. The
 first three request sign-in and profile claims. `offline_access` asks for a

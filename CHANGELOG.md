@@ -8,6 +8,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Behaviour change:** the offline grace period no longer extends a session the
+  provider has authoritatively refused. When a refresh fails with
+  `invalid_grant` — the provider was reachable and rejected the refresh token as
+  revoked or expired — the session now ends at once: `AccessToken` returns `""`,
+  `AuthStatus` reports `GraceMode: false` and `CanUseApp: false`, and
+  `oidcauth:session-expired` is emitted immediately instead of at
+  `LastAuthAt + GracePeriod`. The refusal is persisted, so it also survives a
+  restart; previously the block was in-memory only, so a revoked account regained
+  a full grace window on every launch. Grace exists for "the app could not reach
+  the provider", not for "the provider said no": before this change a
+  deliberately revoked account kept working for the entire configured grace
+  window, on a working network.
+
+  Unchanged and still covered by grace: transport errors, timeouts, DNS
+  failures, offline use, and any response that carries no OAuth error code
+  (including 5xx and non-standard bodies) — classification is by error code, not
+  by HTTP status. So are `invalid_client` / `unauthorized_client`, which refuse the client
+  registration rather than the token, and a fresh `Login` would fail too, so
+  ending grace there would strand the user. Also unchanged: a refusal is treated
+  as inconclusive, and grace is kept, when an earlier refresh for the same
+  generation was abandoned in flight (a cancelled request, `Pause`, or mobile
+  backgrounding) or when stored state holds a demonstrably newer refresh token.
+  Both indicate refresh-token rotation rather than revocation.
+
+  The refused session keeps its ID token, so `Claims` still names the user a
+  re-authentication prompt should address, and drops every credential and
+  timestamp. Applications that relied on grace surviving revocation must treat
+  `oidcauth:session-expired` and `AuthStatus().CanUseApp == false` as the
+  authoritative signal to re-authenticate, and must not infer session state from
+  resource-server status codes.
+- `IsPermanentError` is unchanged in behaviour, but its documentation no longer
+  claims a permanent error means the refresh token is invalid: only
+  `invalid_grant` says that, and only that code ends grace.
+- Refresh failures that permanently park a token generation, and
+  session-integrity failures, are now logged at Warn rather than Debug on both
+  the on-demand and background-loop paths, so a revocation leaves a trace under
+  a default handler.
 - Documentation: refreshed the stale pre-1.0 release gate status (#88) and
   aligned the logout callback examples with the CLI default (#89).
 

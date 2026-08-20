@@ -187,15 +187,18 @@ opaque to clients per RFC 6750.
 
 - `Valid` means the access token expires more than 30 seconds from now.
 - `GraceMode` means the token is no longer valid but the configured grace
-  period, measured from the last successful login or refresh, has not ended.
+  period, measured from the last successful login or refresh, has not ended and
+  the provider has not refused the refresh token.
 - `CanUseApp` is `Valid || GraceMode`. Grace controls application usability; it
   does not make an expired access token acceptable to an API.
 
 `AccessToken` returns a valid token immediately. Inside the 30-second expiry
 buffer it attempts one refresh when discovery is initialized and a refresh
 token exists. If a normal refresh error occurs, it may return the previous
-token while grace is active. A session-integrity failure always fails closed,
-even during grace.
+token while grace is active; that decision is made against the current token
+generation, not the one sampled before the refresh. A session-integrity failure
+always fails closed, even during grace, and so does a provider refusing the
+refresh token itself.
 
 The background refresh supervisor uses the token's original lifetime
 (`ExpiresAt - LastAuthAt`) as a DHCP-style schedule:
@@ -213,12 +216,26 @@ or successful on-demand refresh state. Parking does not clear tokens, launch
 Login, or emit `oidcauth:session-expired`; `AuthStatus` and the configured grace
 period continue to decide whether the app is usable.
 
-A permanent OAuth error also parks that generation immediately, because
-retrying a revoked or invalid refresh token cannot help. The supervisor emits
-`oidcauth:session-expired` once when grace is disabled or exhausted, without
-making more network attempts while grace remains. A session-integrity failure
-parks and emits immediately despite grace, and the affected generation fails
-closed in `AccessToken` and `AuthStatus`.
+A refused client registration (`invalid_client`, `unauthorized_client`) also
+parks that generation immediately, because retrying cannot help. The supervisor
+emits `oidcauth:session-expired` once when grace is disabled or exhausted,
+without making more network attempts while grace remains.
+
+A refused *credential* (`invalid_grant`) is handled differently, because the
+provider was reachable and gave an authoritative answer about the token. The
+Client replaces the generation with a refused session: the ID token is kept, so
+`Claims` still names the user, and every credential and timestamp is dropped, so
+grace has no anchor and the supervisor parks with nothing to refresh. That state
+is persisted, so the refusal survives a restart — the in-memory park alone did
+not, which let a revoked account regain a grace window on every launch.
+`oidcauth:session-expired` is emitted with the state commit, so it does not
+depend on a running supervisor. A refusal is treated as inconclusive, and grace
+is kept, when an earlier attempt for the same generation was abandoned in flight
+or when stored state holds a demonstrably newer refresh token; both indicate
+refresh-token rotation rather than revocation.
+
+A session-integrity failure parks and emits immediately despite grace, and the
+affected generation fails closed in `AccessToken` and `AuthStatus`.
 
 Stopping and restarting the loop does not reset a generation's refresh retry
 stage, terminal disposition, or pending persistence recovery. Token state with

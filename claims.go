@@ -41,7 +41,11 @@ func (c *Claims) Get(name string) (any, bool) {
 }
 
 // Claims decodes the claims from the current session's ID token. It returns
-// ErrNotAuthenticated when there is no active session.
+// ErrNotAuthenticated when no ID token is held.
+//
+// Success is not proof of a usable session: a session the provider has refused
+// keeps its ID token precisely so a re-authentication prompt can name the user.
+// AuthStatus is authoritative for usability.
 //
 // The ID token signature is not verified: go-oidc already verified it during
 // the token exchange. This method inspects the already-trusted token to read

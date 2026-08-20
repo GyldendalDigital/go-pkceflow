@@ -31,9 +31,18 @@ const (
 	// to recover that generation in the background.
 	EventTokenRefreshed = "oidcauth:token-refreshed" //nolint:gosec // G101 false positive: not a credential
 
-	// EventSessionExpired is emitted when the refresh token is permanently
-	// invalid (e.g., revoked) and the grace period (if configured) has expired,
-	// or when a refresh response fails session-integrity checks.
+	// EventSessionExpired is emitted when the session can no longer be renewed.
+	// It fires immediately when the provider refuses the refresh token itself
+	// (invalid_grant) or when a refresh response fails session-integrity checks,
+	// and at the end of the grace period when the failure was a refused client
+	// registration.
+	//
+	// Delivery is best effort and at most once per refusal. A refusal
+	// discovered by AccessToken is emitted with the state commit, so it does not
+	// need a running refresh loop; the remaining cases are delivered by the
+	// supervisor and are therefore deferred while it is stopped or paused. The
+	// event is never re-emitted on a later process start, so treat AuthStatus as
+	// the authoritative signal and this event as a prompt to consult it.
 	EventSessionExpired = "oidcauth:session-expired"
 
 	// EventInitFailed is emitted when an Init() discovery failure reaches its

@@ -267,15 +267,57 @@ stale retry work under the same commit ordering used for normal persistence.
 
 Until a Save returns nil, a restart may load the previous state, the new state,
 or no readable state, depending on where the backend failed. A previous rotated
-refresh token may be rejected after restart; the configured grace period and
-the application's Login policy still apply, and the library never forces a
-browser login. Save-recovery errors are logged without backend error text so a
+refresh token may be rejected after restart. go-pkceflow first checks whether
+the stored state holds a newer refresh token than the one that was refused; if
+it does, the refusal is treated as a superseded generation and grace continues.
+Otherwise the refusal is authoritative and the session ends. The library never
+forces a browser login. Save-recovery errors are logged without backend error text so a
 custom store cannot accidentally expose token material.
 
 After Logout, `RestoreSession` cannot reload tokens into that same Client even
 if persistent deletion failed. A fresh process has no such in-memory tombstone,
 so applications should treat a logged deletion failure as uncertain restart
 durability while preserving Logout's existing best-effort return contract.
+
+## Grace Period Semantics
+
+`Config.GracePeriod` keeps the app usable when token refresh fails. It is
+deliberately asymmetric, because "we could not ask the provider" and "we asked
+and were refused" are different situations:
+
+| Refresh outcome | Grace | `oidcauth:session-expired` |
+|---|---|---|
+| Transport error, DNS, timeout, offline | continues | at grace end |
+| Any response carrying no OAuth error code, including 5xx | continues | at grace end |
+| `invalid_client`, `unauthorized_client` | continues | at grace end |
+| `invalid_grant` | **ends immediately** | immediately |
+| Session-integrity failure | **ends immediately** | immediately |
+
+Only the `invalid_grant` row's event is delivered without a running refresh
+loop, because it is enqueued with the state commit. Every other row is delivered
+by the background supervisor, so it is deferred while that loop is stopped or
+paused. `AuthStatus` is authoritative in all cases.
+
+`invalid_grant` means the provider was reachable and refused the refresh token
+itself: it is revoked or expired. Extending a session on that answer would let a
+deliberately revoked account keep working for the whole grace window, so
+go-pkceflow instead replaces the session with a refused one. That refused state
+is persisted, so the refusal also survives a restart; it keeps the ID token, so
+`Claims` still names the user for a re-authentication prompt, and drops every
+credential, so nothing can be replayed.
+
+`invalid_client` and `unauthorized_client` refuse the *client registration*
+rather than the token. The user cannot resolve those, and a fresh `Login` would
+fail at the authorization endpoint too, so grace continues to cover them. Note
+the consequence: disabling a client registration at the provider is not a
+session-revocation mechanism, since every installed app keeps working for up to
+`GracePeriod`. Revoke refresh tokens or user sessions instead.
+
+Two cases are deliberately treated as inconclusive rather than authoritative,
+because a provider that rotates refresh tokens answers `invalid_grant` for a
+merely superseded token: a refresh abandoned in flight (a cancelled request,
+`Pause`, or mobile backgrounding), and a stored state holding a demonstrably
+newer refresh token. Both keep grace.
 
 ## Concurrent Login and Logout
 

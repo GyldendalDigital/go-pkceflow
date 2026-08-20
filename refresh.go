@@ -79,11 +79,118 @@ func (c *Client) runRefreshAttempt(attempt *refreshAttempt) {
 		&attempt.snapshot,
 		attempt.revision,
 	)
+
+	// Commit before finishRefreshAttempt so no waiter can start a fresh attempt
+	// against the refused generation, and outside performRefresh so the refusal
+	// error survives: committing there would advance the revision and make
+	// refreshFailure report the refusal as a success.
+	if c.commitCredentialRefusal(attempt, refreshErr) {
+		shouldDrain = true
+	}
 	c.finishRefreshAttempt(attempt, &state, refreshErr)
 	if shouldDrain {
 		c.drainEvents()
 	}
 	close(attempt.complete)
+}
+
+// commitCredentialRefusal installs a refused generation when the provider
+// authoritatively refused the refresh token. The refused generation keeps the ID
+// token, so Claims still names the user a re-authentication prompt should
+// address, and drops every credential and timestamp, which is what withdraws
+// grace: AccessToken finds no refresh token and no grace anchor, AuthStatus
+// reports the session unusable, and the refresh loop parks.
+//
+// Persisting it is the point: the in-memory permanent block is keyed to a state
+// revision and does not survive a restart, so without a durable mark a revoked
+// account regained a fresh grace window on every launch.
+//
+// It reports whether the caller must drain events.
+func (c *Client) commitCredentialRefusal(
+	attempt *refreshAttempt,
+	refreshErr error,
+) bool {
+	if !isCredentialRefusedError(refreshErr) {
+		return false
+	}
+
+	c.stateCommitMu.Lock()
+	c.mu.Lock()
+	if c.stateRevision != attempt.revision {
+		// A newer generation already replaced the refused one.
+		c.mu.Unlock()
+		c.stateCommitMu.Unlock()
+		return false
+	}
+	if c.refreshInconclusiveLocked(attempt.revision) {
+		// An earlier attempt for this generation never learned the provider's
+		// answer. On a rotating provider this refusal may mean that attempt
+		// spent the token, not that the session was revoked, so keep grace and
+		// let the ordinary permanent block park the generation.
+		c.mu.Unlock()
+		c.stateCommitMu.Unlock()
+		// Logged after unlocking: a consumer-supplied handler must not be able
+		// to block state commits.
+		c.logger.Warn(
+			"treating refresh refusal as inconclusive; an earlier attempt for " +
+				"this token generation was abandoned in flight",
+		)
+		return false
+	}
+	c.mu.Unlock()
+
+	// Persistence runs under stateCommitMu but never mu. A newer persisted
+	// generation means another process rotated the token and this refusal
+	// concerns a superseded one.
+	persisted, loadErr := c.store.Load()
+	if loadErr != nil {
+		// A read failure is not evidence of rotation, while the refusal is
+		// authoritative about the token that was presented. Fail closed. Logged
+		// after the commit completes, below, rather than under stateCommitMu.
+		defer c.logger.Warn("could not read persisted state while recording a refused refresh token")
+	} else if supersededRefreshToken(&persisted, &attempt.snapshot) {
+		c.stateCommitMu.Unlock()
+		c.logger.Warn(
+			"treating refresh refusal as superseded; persisted state holds a " +
+				"newer refresh token",
+		)
+		return false
+	}
+
+	refused := TokenState{IDToken: attempt.snapshot.IDToken}
+
+	c.mu.Lock()
+	if c.stateRevision != attempt.revision {
+		c.mu.Unlock()
+		c.stateCommitMu.Unlock()
+		return false
+	}
+	c.advanceStateLocked(&refused)
+	committedRevision := c.stateRevision
+	c.mu.Unlock()
+
+	persistErr := c.store.Save(refused)
+	c.recordPersistenceSaveResult(committedRevision, persistErr, c.now())
+	shouldDrain := c.enqueueEvent(EventSessionExpired, nil)
+	c.stateCommitMu.Unlock()
+
+	if persistErr != nil {
+		c.logPersistenceSaveFailure()
+	}
+	return shouldDrain
+}
+
+// supersededRefreshToken reports whether persisted state demonstrably holds a
+// newer refresh token than the one that was refused.
+//
+// Requiring a later LastAuthAt, not merely a different token, keeps the check
+// from firing when the store is *behind* memory after a failed Save: there the
+// persisted token is older, and suppressing the refusal would let a genuine
+// revocation keep its grace window.
+func supersededRefreshToken(persisted, attempted *TokenState) bool {
+	return persisted.RefreshToken != "" &&
+		persisted.RefreshToken != attempted.RefreshToken &&
+		persisted.LastAuthAt.After(attempted.LastAuthAt)
 }
 
 func (c *Client) beginRefreshAttempt(
@@ -230,6 +337,15 @@ func (c *Client) finishRefreshAttempt(
 				&attempt.snapshot,
 				c.now(),
 			)
+		case attempt.ctx.Err() != nil && !errors.As(err, new(*AuthError)):
+			// The attempt was abandoned while the request was in flight, so the
+			// provider's answer is unknown. Keying off the attempt context
+			// rather than the error's shape is deliberate: cancellation races
+			// between the transport and the peer, so the surfaced error may be
+			// a cancellation, an EOF, or a reset. An OAuth error code is the
+			// exception: it proves the provider did answer, so the outcome is
+			// known even though the attempt was also cancelled.
+			c.markRefreshInconclusiveLocked(attempt.revision)
 		}
 		c.mu.Unlock()
 	}

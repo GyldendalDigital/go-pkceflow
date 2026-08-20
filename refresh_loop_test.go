@@ -1053,6 +1053,11 @@ func TestRefreshLoopProductionIntegrityFailureEmitsOnceAndStops(t *testing.T) {
 	}
 }
 
+// The driver is invalid_client, not invalid_grant: a refused *client
+// registration* parks the generation while grace continues to cover the user,
+// which is the behavior this test guards. A refused *credential*
+// (invalid_grant) instead commits a refused generation and withdraws grace; see
+// grace_test.go.
 func TestAccessTokenPermanentFailureParksSchedulerGeneration(t *testing.T) {
 	authenticatedAt := time.Now().UTC().Truncate(time.Second)
 	clock := newManualRefreshClock(authenticatedAt.Add(80 * time.Second))
@@ -1064,7 +1069,7 @@ func TestAccessTokenPermanentFailureParksSchedulerGeneration(t *testing.T) {
 	client.clock = clock
 	client.config.GracePeriod = time.Hour
 	client.mu.Unlock()
-	endpoint.oauthError = "invalid_grant"
+	endpoint.oauthError = "invalid_client"
 	endpoint.unblock()
 
 	if token := client.AccessToken(context.Background()); token != state.AccessToken {
