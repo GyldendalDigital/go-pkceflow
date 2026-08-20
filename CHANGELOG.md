@@ -7,15 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Documentation: refreshed the stale pre-1.0 release gate status (#88) and
+  aligned the logout callback examples with the CLI default (#89).
+
+## [v0.9.0-beta.10] - 2026-08-11
+
+### Added
+- `BearerTransport` for automatic access-token injection into an `http.Client`
+  (#87).
+
+### Changed
+- `examples/cli`: `--logout-path` now defaults to `/logout-callback` instead of
+  being empty (#86).
+- Documentation: separated the desktop and mobile callback sections (#85).
+
+## [v0.9.0-beta.9] - 2026-08-08
+
+### Added
+- `desktopflow`: `LogoutHTML` for a distinct logout callback page (#83).
+
+### Changed
+- Documentation: documented `LogoutHTML`, `SetLogoutPath`, and custom callback
+  pages (#84).
+
+## [v0.9.0-beta.8] - 2026-08-07
+
 ### Added
 - `oidctest`: Strict native-client protocol enforcement (PKCE mandatory,
-  redirect URI validation, code expiry, response_type and scope checks).
+  redirect URI validation, code expiry, response_type and scope checks) (#77).
 - `oidctest`: Adversarial ID token and JWKS testing (key rotation, forced
-  issuer/audience/expiry, JWKS failure simulation).
+  issuer/audience/expiry, JWKS failure simulation) (#78).
 - `oidctest`: Request/response scripting (per-endpoint hooks, request recorder,
-  per-grant-type error injection).
-- `oidctest`: `RecordingEmitter.WaitForEvent` for async test assertions.
-- `oidctest`: `FailingStore` for testing persistence error paths.
+  per-grant-type error injection) (#79).
+- `oidctest`: `RecordingEmitter.WaitForEvent` for async test assertions (#80).
+- `oidctest`: `FailingStore` for testing persistence error paths (#80).
+- `CHANGELOG.md` (#81).
+
+### Changed
+- **Breaking:** `DefaultScopes` is now a function returning a fresh copy on each
+  call, instead of a package-level variable. Callers that read or mutated the
+  variable must call `DefaultScopes()` (#82).
+
+### Fixed
+- Fence canceled and stale `Init` generations so a superseded discovery call
+  cannot commit its snapshot or emit `oidcauth:init-failed` (#76).
 
 ## [v0.9.0-beta.7] - 2026-07-29
 
@@ -86,7 +122,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documentation: architecture, how-it-works, IdP setup guides, mobile
   deep-linking guide.
 
-[Unreleased]: https://github.com/GyldendalDigital/go-pkceflow/compare/v0.9.0-beta.7...HEAD
+[Unreleased]: https://github.com/GyldendalDigital/go-pkceflow/compare/v0.9.0-beta.10...HEAD
+[v0.9.0-beta.10]: https://github.com/GyldendalDigital/go-pkceflow/compare/v0.9.0-beta.9...v0.9.0-beta.10
+[v0.9.0-beta.9]: https://github.com/GyldendalDigital/go-pkceflow/compare/v0.9.0-beta.8...v0.9.0-beta.9
+[v0.9.0-beta.8]: https://github.com/GyldendalDigital/go-pkceflow/compare/v0.9.0-beta.7...v0.9.0-beta.8
 [v0.9.0-beta.7]: https://github.com/GyldendalDigital/go-pkceflow/compare/v0.9.0-beta.6...v0.9.0-beta.7
 [v0.9.0-beta.6]: https://github.com/GyldendalDigital/go-pkceflow/compare/v0.9.0-beta.5...v0.9.0-beta.6
 [v0.9.0-beta.5]: https://github.com/GyldendalDigital/go-pkceflow/compare/v0.9.0-beta.4...v0.9.0-beta.5
