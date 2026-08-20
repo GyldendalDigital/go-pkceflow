@@ -219,6 +219,16 @@ func main() {
 	}
 }
 
+// identify returns the friendliest available label for a claim set.
+func identify(claims *pkceflow.Claims) string {
+	for _, candidate := range []string{claims.PreferredUsername, claims.Email, claims.Name, claims.Subject} {
+		if candidate != "" {
+			return candidate
+		}
+	}
+	return "unknown user"
+}
+
 func printStatus(client *pkceflow.Client, store pkceflow.TokenPersistence) {
 	status := client.AuthStatus()
 
@@ -229,21 +239,33 @@ func printStatus(client *pkceflow.Client, store pkceflow.TokenPersistence) {
 	case status.GraceMode:
 		fmt.Printf("  State:  Grace mode (%d days remaining)\n", status.GraceDaysLeft)
 	default:
-		fmt.Println("  State:  Not authenticated")
+		// AuthStatus reports the same zero result for a session the provider
+		// refused and for one that never existed. Claims is the discriminator:
+		// a refused session keeps its ID token so a re-authentication prompt can
+		// still name the user.
+		if claims, err := client.Claims(); err == nil {
+			fmt.Printf("  State:  Session refused - log in again (was %s)\n", identify(&claims))
+		} else {
+			fmt.Println("  State:  Not authenticated")
+		}
 	}
 	fmt.Printf("  CanUseApp: %v\n", status.CanUseApp)
 
-	// Show token timestamps if we have a session
+	// Show token timestamps if we have a session. A refused session drops every
+	// credential and timestamp, keeping only the ID token, so guard on the
+	// timestamps rather than on IsZero.
 	state, _ := store.Load()
-	if !state.IsZero() {
+	if !state.ExpiresAt.IsZero() {
 		fmt.Printf("  Expires:    %s\n", state.ExpiresAt.Format("15:04:05"))
-		fmt.Printf("  Last auth:  %s\n", state.LastAuthAt.Format("2006-01-02 15:04:05"))
 		remaining := time.Until(state.ExpiresAt)
 		if remaining > 0 {
 			fmt.Printf("  TTL:        %s\n", remaining.Truncate(time.Second))
 		} else {
 			fmt.Printf("  TTL:        expired %s ago\n", (-remaining).Truncate(time.Second))
 		}
+	}
+	if !state.LastAuthAt.IsZero() {
+		fmt.Printf("  Last auth:  %s\n", state.LastAuthAt.Format("2006-01-02 15:04:05"))
 	}
 	fmt.Println("-------------------")
 }
