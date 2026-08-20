@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.9.0-beta.11] - 2026-08-20
+
 ### Changed
 - **Behaviour change:** the offline grace period no longer extends a session the
   provider has authoritatively refused. When a refresh fails with
@@ -189,7 +191,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documentation: architecture, how-it-works, IdP setup guides, mobile
   deep-linking guide.
 
-[Unreleased]: https://github.com/GyldendalDigital/go-pkceflow/compare/v0.9.0-beta.10...HEAD
+[Unreleased]: https://github.com/GyldendalDigital/go-pkceflow/compare/v0.9.0-beta.11...HEAD
+[v0.9.0-beta.11]: https://github.com/GyldendalDigital/go-pkceflow/compare/v0.9.0-beta.10...v0.9.0-beta.11
 [v0.9.0-beta.10]: https://github.com/GyldendalDigital/go-pkceflow/compare/v0.9.0-beta.9...v0.9.0-beta.10
 [v0.9.0-beta.9]: https://github.com/GyldendalDigital/go-pkceflow/compare/v0.9.0-beta.8...v0.9.0-beta.9
 [v0.9.0-beta.8]: https://github.com/GyldendalDigital/go-pkceflow/compare/v0.9.0-beta.7...v0.9.0-beta.8

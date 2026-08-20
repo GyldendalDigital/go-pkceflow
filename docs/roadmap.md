@@ -28,7 +28,7 @@ Current status: **Pre-1.0 beta hardening**
 - [x] Init() and OIDC discovery
 - [x] RestoreSession()
 - [x] Login() flow (PKCE S256, state validation, token exchange)
-- [x] Logout() flow (local + RP-initiated)
+- [x] Logout() flow (local + RP-initiated + RFC 7009 token revocation)
 - [x] AccessToken() and TokenFn()
 - [x] AuthStatus()
 - [x] Token refresh (single-shot, double-check locking)
@@ -118,7 +118,12 @@ use `mobileflow` when their native layer or framework supplies launch URLs.
 ## Before Stable Release
 
 - [ ] Complete desktop application dogfooding and triage resulting API or
-  lifecycle findings.
+  lifecycle findings. First triage round landed in `v0.9.0-beta.11`: grace no
+  longer survives an authoritative refusal, ID token `azp` is validated, the
+  refresh token is revoked on logout, and the wrapper can supply an HTTP client.
+- [ ] Validate RFC 7009 revocation against a live Keycloak realm: that `/revoke`
+  accepts a public client authenticating with `client_id` alone, and that
+  `end_session` still honours `post_logout_redirect_uri` after revocation.
 - [ ] Harden the public `oidctest` fixture: strict native-client protocol
   binding and lifetimes, adversarial ID-token/JWKS integration cases,
   grant-scoped request/response scripting, and pre-v1 API cleanup.
