@@ -315,9 +315,9 @@ additional backend later without breaking the API.
 
 | Provider | Project status | Notes |
 |----------|----------------|-------|
-| Keycloak | Manually validated | Linux and Windows: login, exchange, repeated refresh, logout. macOS auth lifecycle not yet validated |
+| Keycloak | Manually validated | Linux and Windows: login, exchange, repeated refresh, logout. RFC 7009 revocation validated against 26.0.8, including that a public client is accepted with `client_id` alone and that `end_session` still honours `post_logout_redirect_uri` afterwards. macOS auth lifecycle not yet validated |
 | Auth0 | Configuration guide | Native-app PKCE is expected to work; API audience and refresh policy are provider settings |
-| Microsoft Entra ID | Configuration guide | Use a tenant-specific v2 issuer and a public native-app registration |
+| Microsoft Entra ID | Configuration guide | Use a tenant-specific v2 issuer and a public native-app registration. Advertises no `revocation_endpoint`, so logout is browser and local only |
 | Other OIDC providers | Compatibility checklist | Expected when discovery, PKCE S256, public token exchange, nonce-bearing ID tokens, and matching redirects are supported |
 
 Only Keycloak has completed a project-owned live-provider run so far. Automated
