@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Skip-by-default live-provider smoke test for RFC 7009 revocation on logout
+  (`TestKeycloakRevokesRefreshTokenOnLogout`, gated on `PKCEFLOW_SMOKE_ISSUER`).
+  It covers the two things the fake IdP cannot: that a public client is accepted
+  at `/revoke` with `client_id` alone, and that `end_session` still honours
+  `post_logout_redirect_uri` after revocation. Validated against Keycloak 26.0.8.
+
 ## [v0.9.0-beta.11] - 2026-08-20
 
 ### Changed

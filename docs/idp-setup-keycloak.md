@@ -156,12 +156,31 @@ logout performed offline, or one where the endpoint is unreachable. Because
 local state is cleared first, a revocation that fails leaves the token valid at
 Keycloak and no longer revocable by this client.
 
-One consequence of revoking before the browser round trip: revocation may end
-the Keycloak session that the following `id_token_hint` names. Keycloak's
-handling of a hint whose session is already gone is version-dependent, and a
-realm that refuses to honour `post_logout_redirect_uri` in that state shows up as
-the logout flow waiting out `Config.LogoutTimeout`. Validate the pair against
-your realm rather than assuming it. Note that
+Two things about this pairing are worth knowing, both validated live against
+**Keycloak 26.0.8** with the dockerized demo realm:
+
+- Keycloak's `revocation_endpoint_auth_methods_supported` does **not** list
+  `none`, so its metadata implies a public client cannot authenticate at
+  `/revoke`. It accepts `client_id` alone in practice. After logout the refresh
+  token is rejected with `invalid_grant: Offline user session not found`.
+- Revoking before the browser round trip ends the Keycloak session that the
+  following `id_token_hint` names, and `end_session` still honours
+  `post_logout_redirect_uri` and echoes `state` afterwards.
+
+Neither is guaranteed across versions or realm configurations, and the fake IdP
+cannot prove either, so both are covered by a skip-by-default smoke test rather
+than assumed. Re-run it against your own realm after a Keycloak upgrade:
+
+```bash
+# in wails-pkceflow/examples/wails-desktop/keycloak
+docker compose up -d
+
+# in go-pkceflow
+PKCEFLOW_SMOKE_ISSUER=http://localhost:8080/realms/demo PKCEFLOW_SMOKE_CLIENT_ID=demo-native PKCEFLOW_SMOKE_USERNAME=demo PKCEFLOW_SMOKE_PASSWORD=demo go test -run TestKeycloakRevokesRefreshTokenOnLogout -v .
+```
+
+A realm that refuses `post_logout_redirect_uri` once the session is gone would
+show up as the logout flow waiting out `Config.LogoutTimeout`. Note that
 Keycloak's `revocation_endpoint_auth_methods_supported` does not list `none`;
 a public client authenticates with `client_id` alone, which Keycloak accepts in
 practice, but verify it against your realm.
