@@ -1,6 +1,9 @@
 package pkceflow
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 type lifecycleOperationKind uint8
 
@@ -99,12 +102,41 @@ func (c *Client) lifecycleFlowPermit() chan struct{} {
 	return c.lifecycleFlow
 }
 
+// flowCancelledCause attaches a context cause to ErrFlowCancelled so callers can
+// tell a flow that ran out of time from one that was cancelled, while
+// errors.Is(err, ErrFlowCancelled) keeps matching for both.
+//
+// A nil cause returns the bare sentinel. fmt.Errorf would otherwise format it as
+// "%!w(<nil>)" while errors.Is still reported a match, so the mistake would
+// survive a table test and surface only in logs.
+func flowCancelledCause(cause error) error {
+	if cause == nil {
+		return ErrFlowCancelled
+	}
+	return fmt.Errorf("%w: %w", ErrFlowCancelled, cause)
+}
+
+// flowCancelledError classifies why an operation stopped being current.
+//
+// The cause comes from the operation's parent, which is the caller's context
+// wrapped with LoginTimeout or LogoutTimeout, so a deadline there means the flow
+// ran out of time and a cancellation means the caller gave up. Supersession by a
+// newer operation cancels only operation.ctx, leaving the parent clean, so it
+// yields the bare sentinel.
+//
+// It reads Err rather than Cause deliberately: a caller using
+// context.WithCancelCause would otherwise have their own error spliced into a
+// core error message, and errors.Is(err, context.Canceled) would stop matching.
+func (c *Client) flowCancelledError(operation *lifecycleOperation) error {
+	return flowCancelledCause(operation.parent.Err())
+}
+
 func (c *Client) lifecycleOperationError(
 	operation *lifecycleOperation,
 	err error,
 ) error {
 	if !c.lifecycleOperationCurrent(operation) {
-		return ErrFlowCancelled
+		return c.flowCancelledError(operation)
 	}
 	return err
 }
@@ -117,23 +149,23 @@ func (c *Client) runLifecycleFlow(
 	start func(context.Context) (string, error),
 ) (string, error) {
 	if !c.lifecycleOperationCurrent(operation) {
-		return "", ErrFlowCancelled
+		return "", c.flowCancelledError(operation)
 	}
 
 	permit := c.lifecycleFlowPermit()
 	select {
 	case permit <- struct{}{}:
 	case <-operation.ctx.Done():
-		return "", ErrFlowCancelled
+		return "", c.flowCancelledError(operation)
 	}
 	defer func() { <-permit }()
 
 	if !c.lifecycleOperationCurrent(operation) {
-		return "", ErrFlowCancelled
+		return "", c.flowCancelledError(operation)
 	}
 	result, err := start(operation.ctx)
 	if !c.lifecycleOperationCurrent(operation) {
-		return "", ErrFlowCancelled
+		return "", c.flowCancelledError(operation)
 	}
 	return result, err
 }

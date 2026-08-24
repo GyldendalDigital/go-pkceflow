@@ -326,7 +326,10 @@ Lifecycle ordering is scoped to one `Client`. The latest admitted `Login` or
 `Logout` supersedes an older browser operation, except that overlapping Logout
 calls coalesce. A superseded login returns `ErrFlowCancelled` and cannot persist
 tokens or emit `oidcauth:logged-in`, even if its handler or HTTP transport
-returns a late result. Logout clears local state and attempts persistent deletion
+returns a late result. `ErrFlowCancelled` carries its context cause, so
+`errors.Is(err, context.DeadlineExceeded)` identifies a flow that ran out of time
+and `errors.Is(err, context.Canceled)` one the caller gave up on; a superseded
+login reports neither. Logout clears local state and attempts persistent deletion
 before its best-effort provider logout round trip.
 
 Browser handler calls on one Client are handed off serially so a cancelled

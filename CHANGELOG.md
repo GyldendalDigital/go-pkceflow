@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `ErrFlowCancelled` now carries the context cause that ended the flow, so
+  callers can tell a login that ran out of time
+  (`errors.Is(err, context.DeadlineExceeded)`) from one the caller cancelled
+  (`errors.Is(err, context.Canceled)`). Previously every cause — the configured
+  `LoginTimeout` elapsing, the caller's own deadline, an explicit cancellation,
+  and supersession by a newer operation — returned an identical bare sentinel,
+  so a consuming UI could not distinguish a timed-out sign-in from a deliberate
+  cancellation. A superseded flow still reports no cause, since nothing timed out
+  and nobody cancelled. `errors.Is(err, ErrFlowCancelled)` is unchanged and keeps
+  matching in every case; only the message gains a suffix.
+
 ### Added
 - Skip-by-default live-provider smoke test for RFC 7009 revocation on logout
   (`TestKeycloakRevokesRefreshTokenOnLogout`, gated on `PKCEFLOW_SMOKE_ISSUER`).
