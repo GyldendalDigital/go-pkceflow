@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/url"
 
@@ -22,6 +23,9 @@ import (
 // logout. The older Login returns ErrFlowCancelled and cannot persist a late
 // callback or token response. A context that is already cancelled at entry
 // returns ErrFlowCancelled without superseding an active operation.
+//
+// Every ErrFlowCancelled carries its context cause when there is one; see that
+// error's documentation for how to tell a timeout from a cancellation.
 //
 // Requires Init() to have been called first.
 func (c *Client) Login(ctx context.Context) error {
@@ -41,12 +45,12 @@ func (c *Client) Login(ctx context.Context) error {
 		defer cancel()
 	}
 	if ctx.Err() != nil {
-		return ErrFlowCancelled
+		return flowCancelledCause(ctx.Err())
 	}
 
 	operation := c.beginLifecycleOperation(ctx, lifecycleLogin)
 	if operation == nil {
-		return ErrFlowCancelled
+		return flowCancelledCause(ctx.Err())
 	}
 	defer c.finishLifecycleOperation(operation)
 
@@ -85,8 +89,12 @@ func (c *Client) Login(ctx context.Context) error {
 		return c.flow.StartAuthFlow(flowCtx, authURL)
 	})
 	if err != nil {
-		if err == ErrFlowCancelled {
-			return ErrFlowCancelled
+		if errors.Is(err, ErrFlowCancelled) {
+			// Recomputed rather than forwarded: a flow handler could return an
+			// error that wraps the sentinel along with its own text, and core
+			// never forwards handler text. parent.Err is sticky, so this is
+			// equivalent for the errors runLifecycleFlow itself produces.
+			return c.flowCancelledError(operation)
 		}
 		return c.lifecycleOperationError(
 			operation,
@@ -140,7 +148,7 @@ func (c *Client) Login(ctx context.Context) error {
 	}
 	code := codes[0]
 	if !c.lifecycleOperationCurrent(operation) {
-		return ErrFlowCancelled
+		return c.flowCancelledError(operation)
 	}
 
 	exchangeOpts := []oauth2.AuthCodeOption{
@@ -158,7 +166,7 @@ func (c *Client) Login(ctx context.Context) error {
 		)
 	}
 	if !c.lifecycleOperationCurrent(operation) {
-		return ErrFlowCancelled
+		return c.flowCancelledError(operation)
 	}
 
 	// Extract and validate ID token
@@ -200,7 +208,7 @@ func (c *Client) Login(ctx context.Context) error {
 
 	committed, persistErr := c.commitLoginState(operation, &newState)
 	if !committed {
-		return ErrFlowCancelled
+		return c.flowCancelledError(operation)
 	}
 	if persistErr != nil {
 		c.logPersistenceSaveFailure()

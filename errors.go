@@ -26,6 +26,24 @@ var (
 	// ErrFlowCancelled is returned when Login is cancelled by its context,
 	// times out, is cancelled by user action, or is superseded by a newer Login
 	// or Logout on the same Client.
+	//
+	// The error carries the context cause when there is one, so callers can tell
+	// these apart while still matching the sentinel:
+	//
+	//	errors.Is(err, ErrFlowCancelled)          // always true
+	//	errors.Is(err, context.DeadlineExceeded)  // the flow ran out of time
+	//	errors.Is(err, context.Canceled)          // the caller gave up
+	//
+	// Neither cause means no context cause was observed, which in practice means
+	// the flow was superseded by a newer operation. Treat that as "no cause
+	// reported" rather than as a positive supersession signal: a supersession
+	// that coincides with the caller's context ending reports that context's
+	// cause instead.
+	//
+	// A timeout reported here is the flow's own deadline. A transport timeout,
+	// such as one from an http.Client supplied with WithHTTPClient, surfaces as
+	// its own error wrapping context.DeadlineExceeded and does not wrap this
+	// sentinel.
 	ErrFlowCancelled = errors.New("pkceflow: auth flow cancelled")
 
 	// ErrNotAuthenticated is returned by methods that require an authenticated

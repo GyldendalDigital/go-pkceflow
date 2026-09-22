@@ -3,6 +3,7 @@ package pkceflow
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -260,7 +261,7 @@ func (c *Client) doRPLogout(
 		return startFlow(flowCtx, logoutURL)
 	})
 	if err != nil {
-		if err != ErrFlowCancelled {
+		if !errors.Is(err, ErrFlowCancelled) {
 			// Handler errors are intentionally omitted: a handler may echo the
 			// logout URL, which contains the ID token hint.
 			c.logger.Warn("RP-Initiated Logout flow failed")
