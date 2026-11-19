@@ -8,6 +8,20 @@ import (
 
 const minRefreshInterval = 10 * time.Second
 
+// wallClockCheckInterval bounds every timed wait in the refresh and persistence
+// supervisors. Go timers run on the monotonic clock, which on some systems
+// (Linux, macOS) stops while the computer sleeps, so a timer armed for the full
+// delay fires late by however long the machine slept. Capping each wait makes
+// the supervisor re-read the wall clock at least this often, so work that fell
+// due during sleep runs within this interval of waking.
+//
+// Five minutes still leaves most of a typical access token's second half for a
+// proactive refresh after waking, is negligible against grace periods measured
+// in days, and is well above the short backoffs (minRefreshInterval,
+// maxPersistenceRetryInterval), so those waits are never split. It costs at
+// most twelve wakeups an hour, and only while a deadline is pending.
+const wallClockCheckInterval = 5 * time.Minute
+
 type refreshTimer interface {
 	channel() <-chan time.Time
 	stop() bool
@@ -89,6 +103,10 @@ type refreshLoopHandle struct {
 // refused session, which withdraws grace immediately and parks quietly because
 // it holds no refresh token. New Login, RestoreSession, or successful on-demand
 // refresh state wakes the supervisor.
+//
+// Every deadline is a wall-clock instant. Go timers can stop while the computer
+// sleeps, so the loop re-reads the wall clock at least every five minutes:
+// work that fell due during sleep runs within five minutes of waking.
 //
 // If saving a successful Login or refresh reports an error, the committed state
 // remains authoritative in memory. While this loop is active, persistence is
@@ -346,6 +364,11 @@ func refreshStageTime(state *TokenState, stage uint) (time.Time, bool) {
 	return due, due.Before(state.ExpiresAt)
 }
 
+// waitForRefreshLoop blocks until due, a wake broadcast, or cancellation, and
+// reports false only on cancellation. A wait with a deadline returns after at
+// most wallClockCheckInterval even when due has not been reached; the caller
+// then re-evaluates against the wall clock and waits again. A wait without a
+// deadline depends on no clock and is not capped.
 func (c *Client) waitForRefreshLoop(
 	ctx context.Context,
 	wake <-chan struct{},
@@ -364,7 +387,7 @@ func (c *Client) waitForRefreshLoop(
 	if delay <= 0 {
 		return true
 	}
-	timer := c.newRefreshTimer(delay)
+	timer := c.newRefreshTimer(min(delay, wallClockCheckInterval))
 	defer stopRefreshTimer(timer)
 
 	select {

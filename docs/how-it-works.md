@@ -116,8 +116,9 @@ The refresh loop waits until half of the access token's original lifetime
 remains before its first request. If the provider is temporarily unavailable,
 it retries at progressively later lifetime thresholds (one quarter remaining,
 then one eighth, and so on) without starting a request after the token expires.
-Expiry itself never opens the browser or forces sign-in; the app's configured
-grace period still determines whether offline use may continue.
+If the computer sleeps through one of these times, the loop notices within five
+minutes of waking. Expiry itself never opens the browser or forces sign-in; the
+app's configured grace period still determines whether offline use may continue.
 
 If a refresh succeeds at the provider but saving the new tokens fails, the
 running app keeps using the verified new generation. Rolling back could restore

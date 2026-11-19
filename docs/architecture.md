@@ -245,6 +245,15 @@ refresh-token rotation rather than revocation.
 A session-integrity failure parks and emits immediately despite grace, and the
 affected generation fails closed in `AccessToken` and `AuthStatus`.
 
+Every deadline above is a wall-clock instant. Go timers run on the monotonic
+clock, which on Linux and macOS stops while the computer sleeps, so the
+supervisor never waits more than five minutes before re-reading the wall clock.
+A refresh threshold, persistence retry, or grace-end `oidcauth:session-expired`
+that fell due while a laptop slept runs within five minutes of waking, rather
+than late by the time spent asleep. The validity and grace checks in
+`AccessToken` and `AuthStatus` compare wall-clock time too, so a session is
+judged the same after a sleep as after a restart.
+
 Stopping and restarting the loop does not reset a generation's refresh retry
 stage, terminal disposition, or pending persistence recovery. Token state with
 missing or inconsistent lifetime timestamps has no safe background refresh
