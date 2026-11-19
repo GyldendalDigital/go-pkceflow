@@ -252,6 +252,21 @@ func TestFakeIDP_WithRefreshReuseDetection(t *testing.T) {
 		wantRefusal(t, refresh(t, idp, first), "invalid_grant", "invalid or expired refresh token")
 		mustRefresh(t, idp, live)
 	})
+
+	t.Run("off keeps no rotation history", func(t *testing.T) {
+		idp := NewFakeIDP(t)
+		token := issueRefreshToken(t, idp, "test-client")
+		for range 3 {
+			token = mustRefresh(t, idp, token)
+		}
+
+		idp.mu.Lock()
+		spent := len(idp.spentRefresh)
+		idp.mu.Unlock()
+		if spent != 0 {
+			t.Fatalf("spent refresh tokens retained = %d, want 0 without reuse detection", spent)
+		}
+	})
 }
 
 // waitClosed fails the test unless ch is closed within a generous deadline.

@@ -87,7 +87,7 @@ type FakeIDPServer struct {
 	nowFunc         func() time.Time
 
 	// Refresh-token lifecycle.
-	spentRefresh   map[string]*refreshFamily // rotated-out refresh token -> its family
+	spentRefresh   map[string]*refreshFamily // rotated-out refresh token -> its family; kept only under reuse detection
 	slidingRefresh bool                      // when true, refreshTTL runs from the last refresh instead of sign-in
 	reuseRefresh   bool                      // when true, refresh does not rotate: the token stays valid and refresh_token is omitted
 	reuseDetection bool                      // when true, presenting a rotated-out token revokes its family
@@ -961,7 +961,11 @@ func (s *FakeIDPServer) redeemRefreshToken(presented string, now time.Time) (sta
 
 	rotated = generateRandomString(32)
 	delete(s.refreshTokens, presented)
-	s.spentRefresh[presented] = state.family
+	if s.reuseDetection {
+		// Only reuse detection reads this history. Without it a long-running
+		// test would accumulate one entry per refresh for nothing.
+		s.spentRefresh[presented] = state.family
+	}
 	s.refreshTokens[rotated] = &tokenState{
 		subject:  state.subject,
 		clientID: state.clientID,
