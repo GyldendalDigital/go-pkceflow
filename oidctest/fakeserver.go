@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -31,6 +33,13 @@ import (
 //   - client_id on token exchange must match the code's originating client
 //
 // Use WithLenientMode() to disable all strict checks (legacy behavior).
+//
+// Refresh tokens rotate by default: each successful refresh issues a new
+// refresh token and invalidates the presented one. They expire WithRefreshTTL
+// after the sign-in that started the session, and a rotated token keeps that
+// session's end. WithoutRefreshRotation, WithSlidingRefreshExpiry,
+// WithRefreshReuseDetection, and LoseNextRefreshResponse model other provider
+// behaviours.
 type FakeIDPServer struct {
 	// Server is the underlying httptest.Server. Use IssuerURL() instead of accessing directly.
 	Server *httptest.Server
@@ -54,11 +63,11 @@ type FakeIDPServer struct {
 	redirectURIs    []string
 	scopes          []string // allowed scopes; empty means accept any
 	accessTTL       time.Duration
-	refreshTTL      time.Duration
+	refreshTTL      time.Duration // refresh token lifetime; <= 0 disables expiry
 	idTokenTTL      time.Duration
 	codeTTL         time.Duration           // authorization code lifetime
 	codes           map[string]*pendingCode // authorization code -> pending exchange
-	refreshTokens   map[string]*tokenState  // refresh token -> associated state
+	refreshTokens   map[string]*tokenState  // live refresh token -> associated state
 	errorQueue      []string                // queued errors to return on next token request
 	stickyError     string                  // when set, every token request returns this error
 	rejectBasicAuth bool                    // when true, model a public client: reject HTTP Basic client auth and invalidate the code
@@ -76,6 +85,14 @@ type FakeIDPServer struct {
 	forceExpiry     *time.Time              // when set, overrides the expiry in ID tokens
 	forceNotBefore  *time.Time              // when set, overrides nbf in ID tokens
 	nowFunc         func() time.Time
+
+	// Refresh-token lifecycle.
+	spentRefresh   map[string]*refreshFamily // rotated-out refresh token -> its family; kept only under reuse detection
+	slidingRefresh bool                      // when true, refreshTTL runs from the last refresh instead of sign-in
+	reuseRefresh   bool                      // when true, refresh does not rotate: the token stays valid and refresh_token is omitted
+	reuseDetection bool                      // when true, presenting a rotated-out token revokes its family
+	refreshLosses  []refreshLoss             // armed response losses for upcoming refresh grants (FIFO)
+	done           chan struct{}             // closed at test cleanup; releases hanging handlers
 }
 
 // keyEntry is an additional RSA key exposed via the JWKS endpoint.
@@ -94,10 +111,43 @@ type pendingCode struct {
 }
 
 type tokenState struct {
-	subject   string
-	clientID  string
-	createdAt time.Time
+	subject  string
+	clientID string
+	family   *refreshFamily
 }
+
+// refreshFamily links the refresh tokens that descend, by rotation, from one
+// sign-in. It carries the session clock, so a rotated token keeps the session's
+// end, and the family's single live token, so reuse detection can revoke it.
+type refreshFamily struct {
+	signedInAt    time.Time // authorization-code exchange that started the session
+	lastRefreshAt time.Time // most recent successful refresh, or signedInAt
+	live          string    // currently valid refresh token; "" once revoked
+}
+
+// refreshLoss is one armed LoseNextRefreshResponse call.
+type refreshLoss struct {
+	mode      ResponseLoss
+	processed chan struct{}
+}
+
+// ResponseLoss selects how LoseNextRefreshResponse loses a refresh response
+// after the fake IdP has processed the refresh.
+type ResponseLoss int
+
+const (
+	// ResponseLossHang sends nothing and holds the connection open until the
+	// client gives up (its context is cancelled, its timeout fires, or it
+	// closes the connection) or the test ends. The connection is then closed
+	// without a response.
+	ResponseLossHang ResponseLoss = iota + 1
+	// ResponseLossReset closes the connection without a response, with a TCP
+	// reset (SO_LINGER 0), as a crashed or restarted proxy would.
+	ResponseLossReset
+	// ResponseLossBadGateway answers 502 Bad Gateway with an HTML body, as a
+	// reverse proxy does when its upstream response is lost.
+	ResponseLossBadGateway
+)
 
 // Option configures a FakeIDPServer.
 type Option func(*FakeIDPServer)
@@ -118,8 +168,44 @@ func WithAccessTTL(d time.Duration) Option {
 }
 
 // WithRefreshTTL sets the refresh token lifetime. Default: 24 hours.
+//
+// The lifetime is measured from the sign-in (the authorization-code exchange)
+// that started the session, and rotation does not restart it: a rotated
+// refresh token keeps the session's absolute end, as providers with a fixed
+// maximum session length do. Once more than d has elapsed, the refresh grant
+// fails with invalid_grant. Use WithSlidingRefreshExpiry to measure it from the
+// most recent refresh instead. A zero or negative d disables expiry.
+//
+// Time comes from WithClock, so tests can step past the lifetime. The lifetime
+// is enforced in lenient mode too.
 func WithRefreshTTL(d time.Duration) Option {
 	return func(s *FakeIDPServer) { s.refreshTTL = d }
+}
+
+// WithSlidingRefreshExpiry measures the WithRefreshTTL lifetime from the most
+// recent successful refresh instead of from sign-in, modelling an idle timeout:
+// a session that refreshes at least once per lifetime never expires.
+func WithSlidingRefreshExpiry() Option {
+	return func(s *FakeIDPServer) { s.slidingRefresh = true }
+}
+
+// WithoutRefreshRotation models a provider that does not rotate refresh
+// tokens. A successful refresh leaves the presented refresh token valid and
+// omits refresh_token from the response, so a client keeps the token it has
+// (RFC 6749 section 6). SetRefreshRotation switches rotation at run time.
+func WithoutRefreshRotation() Option {
+	return func(s *FakeIDPServer) { s.reuseRefresh = true }
+}
+
+// WithRefreshReuseDetection models a provider that detects refresh-token
+// reuse, as Auth0, Okta, and Keycloak (with "Revoke Refresh Token" on) do.
+// Presenting a refresh token that was already rotated out revokes the live
+// refresh token descended from the same sign-in, and both requests fail with
+// invalid_grant. Without this option a rotated-out token is refused but the
+// live token keeps working. It has no effect while rotation is off, because no
+// token is then rotated out.
+func WithRefreshReuseDetection() Option {
+	return func(s *FakeIDPServer) { s.reuseDetection = true }
 }
 
 // WithIDTokenTTL sets the ID token lifetime. Default: 5 minutes.
@@ -226,6 +312,8 @@ func NewFakeIDP(t *testing.T, opts ...Option) *FakeIDPServer {
 		codeTTL:       30 * time.Second,
 		codes:         make(map[string]*pendingCode),
 		refreshTokens: make(map[string]*tokenState),
+		spentRefresh:  make(map[string]*refreshFamily),
+		done:          make(chan struct{}),
 		nowFunc:       time.Now,
 	}
 
@@ -244,6 +332,9 @@ func NewFakeIDP(t *testing.T, opts ...Option) *FakeIDPServer {
 
 	s.Server = httptest.NewServer(mux)
 	t.Cleanup(s.Server.Close)
+	// Cleanups run last-in first-out, so this releases any handler still
+	// hanging under ResponseLossHang before Server.Close waits for handlers.
+	t.Cleanup(func() { close(s.done) })
 
 	return s
 }
@@ -298,6 +389,41 @@ func (s *FakeIDPServer) ClearTokenError() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stickyError = ""
+}
+
+// SetRefreshRotation turns refresh-token rotation on or off for subsequent
+// refresh grants, so a test can model a provider whose configuration changes
+// mid-session. Rotation is on by default; off behaves as WithoutRefreshRotation.
+func (s *FakeIDPServer) SetRefreshRotation(enabled bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reuseRefresh = !enabled
+}
+
+// LoseNextRefreshResponse makes the next refresh_token grant be processed in
+// full and then lose its response the way loss describes. Processing is
+// everything a delivered refresh does: a valid refresh token is rotated (or,
+// with rotation off, its session clock advanced), and an expired or reused one
+// is refused, revoking its family under WithRefreshReuseDetection. The client
+// never sees the outcome. Only grants that reach refresh processing consume a
+// loss; requests answered by QueueError, SetTokenError, GrantErrors, or a
+// token hook do not.
+//
+// The returned channel is closed once processing has finished and before the
+// response is lost, so a test can wait for the rotation to have happened.
+// Each call arms one loss; several calls apply to successive refresh grants in
+// order. It panics on an unknown ResponseLoss.
+func (s *FakeIDPServer) LoseNextRefreshResponse(loss ResponseLoss) <-chan struct{} {
+	switch loss {
+	case ResponseLossHang, ResponseLossReset, ResponseLossBadGateway:
+	default:
+		panic(fmt.Sprintf("oidctest: unknown ResponseLoss %d", loss))
+	}
+	processed := make(chan struct{})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refreshLosses = append(s.refreshLosses, refreshLoss{mode: loss, processed: processed})
+	return processed
 }
 
 // SetAccessTTL changes the access token lifetime for subsequent token responses.
@@ -646,8 +772,8 @@ func (s *FakeIDPServer) handleToken(w http.ResponseWriter, r *http.Request) {
 	grantType := r.FormValue("grant_type")
 
 	// Check per-grant-type errors.
-	if errCode, ok := s.GrantErrors.check(grantType); ok {
-		tokenError(w, errCode, "simulated grant-scoped error")
+	if grantErr, ok := s.GrantErrors.check(grantType); ok {
+		tokenError(w, grantErr.code, grantErr.description)
 		return
 	}
 
@@ -655,7 +781,16 @@ func (s *FakeIDPServer) handleToken(w http.ResponseWriter, r *http.Request) {
 	case "authorization_code":
 		s.handleAuthCodeExchange(w, r)
 	case "refresh_token":
-		s.handleRefreshExchange(w, r)
+		loss, armed := s.takeRefreshLoss()
+		if !armed {
+			s.handleRefreshExchange(w, r)
+			return
+		}
+		// Process the refresh in full and discard its response; only then
+		// lose the response the client sees.
+		s.handleRefreshExchange(httptest.NewRecorder(), r)
+		close(loss.processed)
+		s.loseResponse(w, r, loss.mode)
 	default:
 		tokenError(w, "unsupported_grant_type", "unsupported grant_type: "+grantType)
 	}
@@ -727,12 +862,12 @@ func (s *FakeIDPServer) handleAuthCodeExchange(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Store refresh token
+	// Store the refresh token as the first of a new family.
 	s.mu.Lock()
 	s.refreshTokens[refreshToken] = &tokenState{
-		subject:   pending.subject,
-		clientID:  pending.clientID,
-		createdAt: now,
+		subject:  pending.subject,
+		clientID: pending.clientID,
+		family:   &refreshFamily{signedInAt: now, lastRefreshAt: now, live: refreshToken},
 	}
 	s.mu.Unlock()
 
@@ -748,13 +883,10 @@ func (s *FakeIDPServer) handleAuthCodeExchange(w http.ResponseWriter, r *http.Re
 }
 
 func (s *FakeIDPServer) handleRefreshExchange(w http.ResponseWriter, r *http.Request) {
-	oldRefresh := r.FormValue("refresh_token")
+	now := s.now()
 
 	s.mu.Lock()
-	state, ok := s.refreshTokens[oldRefresh]
-	if ok {
-		delete(s.refreshTokens, oldRefresh) // rotation: old token invalidated
-	}
+	state, newRefreshToken, refusal := s.redeemRefreshToken(r.FormValue("refresh_token"), now)
 	accessTTL := s.accessTTL
 	idTokenTTL := s.idTokenTTL
 	omitIDToken := s.omitRefreshID
@@ -765,14 +897,12 @@ func (s *FakeIDPServer) handleRefreshExchange(w http.ResponseWriter, r *http.Req
 	}
 	s.mu.Unlock()
 
-	if !ok {
-		tokenError(w, "invalid_grant", "invalid or expired refresh token")
+	if refusal != "" {
+		tokenError(w, "invalid_grant", refusal)
 		return
 	}
 
-	now := s.now()
 	accessToken := generateRandomString(32)
-	newRefreshToken := generateRandomString(32)
 	var idToken string
 	if !omitIDToken {
 		if rawIDToken != nil {
@@ -787,26 +917,127 @@ func (s *FakeIDPServer) handleRefreshExchange(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	// Store new refresh token
-	s.mu.Lock()
-	s.refreshTokens[newRefreshToken] = &tokenState{
-		subject:   state.subject,
-		clientID:  state.clientID,
-		createdAt: now,
-	}
-	s.mu.Unlock()
-
 	resp := map[string]any{
-		"access_token":  accessToken,
-		"token_type":    "Bearer",
-		"expires_in":    int(accessTTL.Seconds()),
-		"refresh_token": newRefreshToken,
+		"access_token": accessToken,
+		"token_type":   "Bearer",
+		"expires_in":   int(accessTTL.Seconds()),
+	}
+	if newRefreshToken != "" {
+		resp["refresh_token"] = newRefreshToken
 	}
 	if idToken != "" {
 		resp["id_token"] = idToken
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck // response write failure surfaces as client-side error in test
+}
+
+// redeemRefreshToken validates a presented refresh token and, when it is
+// accepted, advances its session clock and rotates it unless rotation is off.
+// It returns the token's state, the new refresh token to send ("" when the
+// token was not rotated), and a non-empty error_description when the grant
+// must fail with invalid_grant. Validation and rotation happen in one critical
+// section, so two concurrent presentations of one token cannot both succeed.
+// The caller must hold s.mu.
+func (s *FakeIDPServer) redeemRefreshToken(presented string, now time.Time) (state *tokenState, rotated, refusal string) {
+	state, ok := s.refreshTokens[presented]
+	if !ok {
+		if family, spent := s.spentRefresh[presented]; spent && s.reuseDetection {
+			delete(s.refreshTokens, family.live)
+			family.live = ""
+			return nil, "", "refresh token reuse detected; token family revoked"
+		}
+		return nil, "", "invalid or expired refresh token"
+	}
+	if s.refreshExpired(state.family, now) {
+		delete(s.refreshTokens, presented)
+		return nil, "", "refresh token expired"
+	}
+
+	state.family.lastRefreshAt = now
+	if s.reuseRefresh {
+		return state, "", ""
+	}
+
+	rotated = generateRandomString(32)
+	delete(s.refreshTokens, presented)
+	if s.reuseDetection {
+		// Only reuse detection reads this history. Without it a long-running
+		// test would accumulate one entry per refresh for nothing.
+		s.spentRefresh[presented] = state.family
+	}
+	s.refreshTokens[rotated] = &tokenState{
+		subject:  state.subject,
+		clientID: state.clientID,
+		family:   state.family,
+	}
+	state.family.live = rotated
+	return state, rotated, ""
+}
+
+// refreshExpired reports whether family's session has outlived refreshTTL,
+// measured from sign-in by default or from the most recent refresh under
+// WithSlidingRefreshExpiry. The caller must hold s.mu.
+func (s *FakeIDPServer) refreshExpired(family *refreshFamily, now time.Time) bool {
+	if s.refreshTTL <= 0 {
+		return false
+	}
+	start := family.signedInAt
+	if s.slidingRefresh {
+		start = family.lastRefreshAt
+	}
+	return now.Sub(start) > s.refreshTTL
+}
+
+// takeRefreshLoss pops the oldest loss armed by LoseNextRefreshResponse.
+func (s *FakeIDPServer) takeRefreshLoss() (refreshLoss, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.refreshLosses) == 0 {
+		return refreshLoss{}, false
+	}
+	loss := s.refreshLosses[0]
+	s.refreshLosses = s.refreshLosses[1:]
+	return loss, true
+}
+
+// badGatewayPage is the body ResponseLossBadGateway sends: a reverse proxy's
+// HTML error page, not an OAuth error response.
+const badGatewayPage = `<html>
+<head><title>502 Bad Gateway</title></head>
+<body>
+<center><h1>502 Bad Gateway</h1></center>
+<hr><center>gateway</center>
+</body>
+</html>
+`
+
+// loseResponse makes sure the client never receives a processed refresh
+// response, in the way mode describes.
+func (s *FakeIDPServer) loseResponse(w http.ResponseWriter, r *http.Request, mode ResponseLoss) {
+	switch mode {
+	case ResponseLossHang:
+		select {
+		case <-r.Context().Done(): // the client gave up and closed the connection
+		case <-s.done: // the test is ending
+		}
+		// Abort without writing, so the connection closes with no response
+		// even if the client is still waiting.
+		panic(http.ErrAbortHandler)
+	case ResponseLossReset:
+		conn, _, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			panic(http.ErrAbortHandler)
+		}
+		if tcp, ok := conn.(*net.TCPConn); ok {
+			_ = tcp.SetLinger(0) // close with RST instead of FIN
+		}
+		_ = conn.Close()
+	default: // ResponseLossBadGateway
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusBadGateway)
+		io.WriteString(w, badGatewayPage) //nolint:errcheck // response write failure surfaces as client-side error in test
+	}
 }
 
 func stateSubject(state *tokenState) string {
@@ -959,13 +1190,16 @@ func generateRandomString(n int) string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
+// tokenError writes an OAuth error response. An empty description omits the
+// optional error_description member.
 func tokenError(w http.ResponseWriter, code, description string) {
+	body := map[string]string{"error": code}
+	if description != "" {
+		body["error_description"] = description
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusBadRequest)
-	json.NewEncoder(w).Encode(map[string]string{ //nolint:errcheck // response write failure surfaces as client-side error in test
-		"error":             code,
-		"error_description": description,
-	})
+	json.NewEncoder(w).Encode(body) //nolint:errcheck // response write failure surfaces as client-side error in test
 }
 
 func redirectWithError(w http.ResponseWriter, r *http.Request, redirectURI, state, code, description string) {

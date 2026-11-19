@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cancellation. A superseded flow still reports no cause, since nothing timed out
   and nobody cancelled. `errors.Is(err, ErrFlowCancelled)` is unchanged and keeps
   matching in every case; only the message gains a suffix.
+- `oidctest`: `WithRefreshTTL` is now enforced. It was stored but never read, so
+  refresh tokens never expired in the fake IdP. The lifetime (still 24 hours by
+  default) is measured from sign-in and kept across rotations, so a rotated
+  refresh token keeps the session's absolute end, and a refresh past it fails
+  with `invalid_grant`. Tests that run the fake on the real clock are unaffected.
+  A test that advances a `WithClock` clock by more than the lifetime must pass a
+  longer `WithRefreshTTL`, or `WithRefreshTTL(0)`, which now disables expiry.
 
 ### Fixed
 - Session timing no longer drifts while the computer sleeps. Go timers, and
@@ -40,6 +47,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   monotonic clock there counts sleep, and the runtime wakes timers on resume.
 
 ### Added
+- `oidctest.FakeIDPServer` can model more refresh-token providers (#104):
+  - `WithSlidingRefreshExpiry` measures the refresh lifetime from the most recent
+    refresh instead of from sign-in, as an idle timeout.
+  - `WithoutRefreshRotation` and `SetRefreshRotation` model a provider that keeps
+    one refresh token: the presented token stays valid and the response omits
+    `refresh_token`.
+  - `WithRefreshReuseDetection` revokes the live token of a family when a
+    rotated-out token from it is presented again, and refuses both with
+    `invalid_grant`, as Auth0, Okta, and Keycloak with "Revoke Refresh Token" do.
+  - `GrantErrors.SetWithDescription` refuses one grant type with a chosen
+    `error` and `error_description`, or none, persistently like `Set`.
+    `QueueError` and `SetTokenError` hit every grant type, and `Set` always sent
+    the same description.
+  - `LoseNextRefreshResponse` processes the next refresh in full, so the token
+    really rotates, then loses the response with `ResponseLossHang`,
+    `ResponseLossReset` (TCP reset), or `ResponseLossBadGateway` (a 502 HTML
+    page). It returns a channel that closes once the refresh has been processed.
 - Skip-by-default live-provider smoke test for RFC 7009 revocation on logout
   (`TestKeycloakRevokesRefreshTokenOnLogout`, gated on `PKCEFLOW_SMOKE_ISSUER`).
   It covers the two things the fake IdP cannot: that a public client is accepted

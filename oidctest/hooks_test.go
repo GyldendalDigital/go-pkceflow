@@ -254,3 +254,28 @@ func TestGrantTypeErrorMap(t *testing.T) {
 		}
 	}
 }
+
+func TestGrantTypeErrorMap_SetWithDescription(t *testing.T) {
+	idp := NewFakeIDP(t)
+	token := issueRefreshToken(t, idp, "test-client")
+
+	idp.GrantErrors.SetWithDescription("refresh_token", "invalid_grant", "refresh token not found or revoked")
+
+	// Like Set, it is scoped to its grant type and persists until cleared.
+	issueRefreshToken(t, idp, "test-client")
+	for range 2 {
+		wantRefusal(t, refresh(t, idp, token), "invalid_grant", "refresh token not found or revoked")
+	}
+
+	// An empty description omits error_description.
+	idp.GrantErrors.SetWithDescription("refresh_token", "invalid_grant", "")
+	got := refresh(t, idp, token)
+	if got.status != http.StatusBadRequest || got.errorCode != "invalid_grant" || got.hasDescription {
+		t.Fatalf("refresh = %d %q (description present: %v), want 400 invalid_grant without error_description",
+			got.status, got.errorCode, got.hasDescription)
+	}
+
+	// The refusals neither consumed nor rotated the token.
+	idp.GrantErrors.Clear("refresh_token")
+	mustRefresh(t, idp, token)
+}
