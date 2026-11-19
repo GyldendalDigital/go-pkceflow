@@ -223,22 +223,42 @@ func (h *Hooks) runUserinfo(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // GrantTypeErrorMap holds per-grant-type error injection. When a grant type
-// has an entry, the token handler returns that error code instead of processing.
+// has an entry, the token handler returns that error code instead of processing,
+// so the presented code or refresh token is neither consumed nor rotated.
 type GrantTypeErrorMap struct {
 	mu     sync.Mutex
-	errors map[string]string
+	errors map[string]grantError
 }
+
+// grantError is one injected token endpoint error.
+type grantError struct {
+	code        string
+	description string
+}
+
+// defaultGrantErrorDescription is the error_description Set uses.
+const defaultGrantErrorDescription = "simulated grant-scoped error"
 
 // Set configures an error for a specific grant type (e.g., "authorization_code"
 // or "refresh_token"). The error will be returned on every token request with
 // that grant_type until cleared.
 func (m *GrantTypeErrorMap) Set(grantType, errorCode string) {
+	m.SetWithDescription(grantType, errorCode, defaultGrantErrorDescription)
+}
+
+// SetWithDescription is Set with a chosen error_description, so a test can
+// reproduce a provider's exact refusal, for example
+// SetWithDescription("refresh_token", "invalid_grant", "refresh token not found or revoked").
+// An empty description omits error_description, as some providers do. Like
+// Set, it applies to every request with that grant_type until cleared, and it
+// replaces any error already set for the grant type.
+func (m *GrantTypeErrorMap) SetWithDescription(grantType, errorCode, description string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.errors == nil {
-		m.errors = make(map[string]string)
+		m.errors = make(map[string]grantError)
 	}
-	m.errors[grantType] = errorCode
+	m.errors[grantType] = grantError{code: errorCode, description: description}
 }
 
 // Clear removes the error for a specific grant type.
@@ -255,14 +275,14 @@ func (m *GrantTypeErrorMap) ClearAll() {
 	m.errors = nil
 }
 
-func (m *GrantTypeErrorMap) check(grantType string) (string, bool) {
+func (m *GrantTypeErrorMap) check(grantType string) (grantError, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.errors == nil {
-		return "", false
+		return grantError{}, false
 	}
-	code, ok := m.errors[grantType]
-	return code, ok
+	e, ok := m.errors[grantType]
+	return e, ok
 }
 
 // cloneValues returns a deep copy of url.Values.
