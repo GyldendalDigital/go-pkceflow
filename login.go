@@ -196,13 +196,14 @@ func (c *Client) Login(ctx context.Context) error {
 		)
 	}
 
-	// Build and persist token state
+	// Build and persist token state. oauth2 derives Expiry from time.Now, so
+	// strip its monotonic reading as Client.now does for LastAuthAt.
 	now := c.now()
 	newState := TokenState{
 		AccessToken:  token.AccessToken,
 		RefreshToken: token.RefreshToken,
 		IDToken:      rawIDToken,
-		ExpiresAt:    token.Expiry,
+		ExpiresAt:    token.Expiry.Round(0),
 		LastAuthAt:   now,
 	}
 

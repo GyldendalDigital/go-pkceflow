@@ -453,12 +453,14 @@ func (c *Client) performRefresh(
 		}
 	}
 
+	// oauth2 derives Expiry from time.Now, so strip its monotonic reading as
+	// Client.now does for LastAuthAt.
 	now := c.now()
 	newState := TokenState{
 		AccessToken:  newToken.AccessToken,
 		RefreshToken: refreshToken,
 		IDToken:      idToken,
-		ExpiresAt:    newToken.Expiry,
+		ExpiresAt:    newToken.Expiry.Round(0),
 		LastAuthAt:   now,
 	}
 

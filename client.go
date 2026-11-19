@@ -148,12 +148,20 @@ type noopEmitter struct{}
 
 func (noopEmitter) Emit(_ string, _ any) {}
 
-// now returns the current time. Can be overridden in tests.
+// now returns the current wall-clock time with no monotonic clock reading. The
+// clock can be replaced in tests.
+//
+// Every caller compares the result with a wall-clock instant, or derives one
+// from it: a provider-issued expiry, a grace end anchored at LastAuthAt, or a
+// loop deadline derived from those. When both Times carry a monotonic reading,
+// Go compares them on the monotonic clock, which on some systems stops while
+// the computer sleeps. Stripping it here keeps those comparisons on the wall
+// clock, matching persisted state, which never carries a monotonic reading.
 func (c *Client) now() time.Time {
 	if c.clock == nil {
-		return time.Now()
+		return time.Now().Round(0)
 	}
-	return c.clock.Now()
+	return c.clock.Now().Round(0)
 }
 
 // tokenExpiryBuffer is subtracted from the token expiry to avoid using
@@ -242,6 +250,10 @@ func (c *Client) RestoreSession() (restored bool, err error) {
 		c.stateCommitMu.Unlock()
 		return false, nil
 	}
+	// A custom store may return instants built from time.Now. Strip their
+	// monotonic readings, as Login and refresh do; see Client.now.
+	state.ExpiresAt = state.ExpiresAt.Round(0)
+	state.LastAuthAt = state.LastAuthAt.Round(0)
 
 	c.mu.Lock()
 	c.setStateLocked(&state)

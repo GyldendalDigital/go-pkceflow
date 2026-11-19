@@ -19,6 +19,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and nobody cancelled. `errors.Is(err, ErrFlowCancelled)` is unchanged and keeps
   matching in every case; only the message gains a suffix.
 
+### Fixed
+- Session timing no longer drifts while the computer sleeps. Go timers, and
+  comparisons between two in-process `time.Now` readings, use the monotonic
+  clock, which on Linux and macOS stops during sleep. A laptop that slept through
+  a scheduled background refresh ran it late by the time spent asleep; the same
+  held for a pending persistence retry and for the `oidcauth:session-expired`
+  event due at grace end after a refused client registration. Worse,
+  `AccessToken` and `AuthStatus` could judge an access token valid, or a grace
+  window open, after the wall clock had passed its end, because the expiry and
+  the current time were both in-process readings compared on the stopped clock.
+  The same stored state was judged correctly after a restart, since persisted
+  times carry no monotonic reading. The library now strips monotonic readings
+  from the instants it keeps in `TokenState` and from its own clock reads, so
+  validity, grace and every loop deadline use wall-clock time, and the refresh
+  and persistence supervisors re-read the wall clock at least every five
+  minutes. Work that fell due during sleep now runs within five minutes of
+  waking. Events are still delivered at most once and in the same order, and
+  still deferred while the loop is stopped. Windows was largely unaffected: Go's
+  monotonic clock there counts sleep, and the runtime wakes timers on resume.
+
 ### Added
 - Skip-by-default live-provider smoke test for RFC 7009 revocation on logout
   (`TestKeycloakRevokesRefreshTokenOnLogout`, gated on `PKCEFLOW_SMOKE_ISSUER`).
