@@ -322,7 +322,8 @@ because a provider that rotates refresh tokens answers `invalid_grant` for a
 merely superseded token:
 
 - a refresh that never learned the provider's answer: it ran out of its
-  two-minute deadline, or failed after every caller had stopped waiting;
+  two-minute deadline, or failed without an OAuth error code (such as a dropped
+  connection or a gateway's 5xx page) after every caller had stopped waiting;
 - a stored state holding a demonstrably newer refresh token.
 
 Both keep grace. The token generation is parked as for `invalid_client`: it is

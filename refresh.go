@@ -386,7 +386,7 @@ func (c *Client) finishRefreshAttempt(
 				c.now(),
 			)
 		case (attempt.ctx.Err() != nil || attempt.orphaned) &&
-			!errors.As(err, new(*AuthError)):
+			!providerAnswered(err):
 			// The attempt ran out of its deadline, or failed after every caller
 			// had stopped waiting, while the request was in flight, so the
 			// provider's answer is unknown. Keying off the attempt's state
@@ -394,7 +394,8 @@ func (c *Client) finishRefreshAttempt(
 			// may surface as a cancellation, an EOF, or a reset, and a mobile OS
 			// may reclaim a paused app's socket. An OAuth error code is the
 			// exception: it proves the provider did answer, so the outcome is
-			// known.
+			// known. A response without one, such as a gateway's 502, is not an
+			// answer, even though asAuthError wraps it in an AuthError too.
 			c.markRefreshInconclusiveLocked(attempt.revision)
 		}
 		c.mu.Unlock()

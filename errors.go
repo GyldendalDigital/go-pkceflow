@@ -147,6 +147,21 @@ func isSessionIntegrityError(err error) bool {
 	return errors.Is(err, errSessionIntegrity)
 }
 
+// tokenEndpointErrorCode is the AuthError code asAuthError assigns to a
+// token-endpoint response that carried no OAuth2 error code, such as a 5xx or a
+// gateway's HTML error page.
+const tokenEndpointErrorCode = "token_endpoint_error"
+
+// providerAnswered reports whether err carries an OAuth2 error code from the
+// token endpoint. Only such a code proves the provider processed the request
+// and answered it. A response without one, such as a gateway's 502, proves
+// nothing: the provider may have processed the request, and rotated the refresh
+// token, without its answer reaching the client.
+func providerAnswered(err error) bool {
+	var authErr *AuthError
+	return errors.As(err, &authErr) && authErr.Code != tokenEndpointErrorCode
+}
+
 // asAuthError converts an OAuth2 token-endpoint error into an *AuthError,
 // preserving the OAuth2 error code (RFC 6749 section 5.2) so IsPermanentError
 // and consumer inspection work uniformly across the login and refresh paths.
@@ -164,7 +179,7 @@ func asAuthError(err error) error {
 
 	code := re.ErrorCode
 	if code == "" {
-		code = "token_endpoint_error"
+		code = tokenEndpointErrorCode
 	}
 
 	message := re.ErrorDescription

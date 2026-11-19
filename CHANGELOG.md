@@ -36,9 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   what it receives. A later caller for the same token generation joins it rather
   than presenting the token again. As before, a refusal is treated as
   inconclusive when an earlier attempt failed after every caller had stopped
-  waiting; one that ran out of the deadline counts too. An attempt for a token
-  generation that has since been replaced, and that nobody waits for, is
-  stopped rather than allowed to delay a refresh of the current generation.
+  waiting, unless the failure carried an OAuth error code; a dropped connection
+  or a gateway's 5xx page counts, and so does running out of the deadline. An
+  attempt for a token generation that has since been replaced, and that nobody
+  waits for, is stopped rather than allowed to delay a refresh of the current
+  generation.
 - A refreshed ID token whose verification is cut short by the refresh attempt's
   own deadline, for example while fetching the provider's signing keys, is no
   longer reported as a session-integrity failure that ends the session at once.

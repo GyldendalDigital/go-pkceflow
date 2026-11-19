@@ -1,7 +1,6 @@
 package pkceflow
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -12,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -1287,14 +1287,16 @@ func TestRefreshLoopReplacementDoesNotWaitForStuckPredecessor(t *testing.T) {
 }
 
 // resetAfterSendTransport models a request that reached the provider (which
-// rotated the token) but whose connection was torn down before the response
-// arrived, as when a mobile OS reclaims a backgrounded app's socket. The error
-// is a transport error, not the attempt context. Every later request is refused
-// with invalid_grant, as a rotating provider answers for the spent token.
+// rotated the token) but whose response never arrived intact. By default the
+// connection is torn down, as when a mobile OS reclaims a backgrounded app's
+// socket; first, when set, replaces that outcome. The failure is not the
+// attempt context. Every later request is refused with invalid_grant, as a
+// rotating provider answers for the spent token.
 type resetAfterSendTransport struct {
 	entered  chan struct{}
 	release  chan struct{}
 	requests atomic.Int32
+	first    func(*http.Request) (*http.Response, error)
 }
 
 func newResetAfterSendTransport() *resetAfterSendTransport {
@@ -1308,44 +1310,97 @@ func (t *resetAfterSendTransport) RoundTrip(r *http.Request) (*http.Response, er
 	if t.requests.Add(1) == 1 {
 		close(t.entered)
 		<-t.release // deliberately ignores r.Context(): the bytes are on the wire
+		if t.first != nil {
+			return t.first(r)
+		}
 		return nil, &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}
 	}
+	return tokenEndpointResponse(r, http.StatusBadRequest, "application/json", `{"error":"invalid_grant"}`), nil
+}
+
+func tokenEndpointResponse(r *http.Request, status int, contentType, body string) *http.Response {
 	return &http.Response{
-		StatusCode: http.StatusBadRequest,
-		Status:     "400 Bad Request",
-		Header:     http.Header{"Content-Type": {"application/json"}},
-		Body:       io.NopCloser(bytes.NewReader([]byte(`{"error":"invalid_grant"}`))),
+		StatusCode: status,
+		Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
+		Header:     http.Header{"Content-Type": {contentType}},
+		Body:       io.NopCloser(strings.NewReader(body)),
 		Request:    r,
-	}, nil
+	}
 }
 
 // A caller that gives up no longer cancels the attempt, so a failure that
-// follows can be a transport error rather than a context error. It is still
-// unknown whether the provider spent the token, so the next refusal must keep
-// grace exactly as it did when leaving cancelled the attempt.
+// follows can be a transport error or a gateway's response rather than a
+// context error. Neither says whether the provider spent the token, so the next
+// refusal must keep grace exactly as it did when leaving cancelled the attempt.
+// Only an OAuth error code is an answer.
 func TestRefreshFailureAfterEveryCallerLeftIsInconclusive(t *testing.T) {
-	emitter := &recordingTestEmitter{}
-	client, state := newGraceClientForEndpoint(t, "http://token.invalid/token", emitter)
-	transport := newResetAfterSendTransport()
-	client.httpClient = &http.Client{Transport: transport}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	result := make(chan string, 1)
-	go func() { result <- client.AccessToken(ctx) }()
-	waitForTestSignal(t, transport.entered, "refresh did not reach the transport")
-	cancel()
-	waitForTestString(t, result, "AccessToken did not return after cancellation")
-	close(transport.release)
-	waitForInconclusiveRefresh(t, client)
-
-	if token := client.AccessToken(context.Background()); token != state.AccessToken {
-		t.Fatalf("AccessToken = %q, want the grace token %q", token, state.AccessToken)
+	tests := []struct {
+		name         string
+		first        func(*http.Request) (*http.Response, error)
+		inconclusive bool
+	}{
+		{name: "connection reset", inconclusive: true},
+		{
+			name: "gateway error without an OAuth code",
+			first: func(r *http.Request) (*http.Response, error) {
+				return tokenEndpointResponse(r, http.StatusBadGateway, "text/html",
+					"<html><body><h1>502 Bad Gateway</h1></body></html>"), nil
+			},
+			inconclusive: true,
+		},
+		{
+			name: "OAuth error code is an answer",
+			first: func(r *http.Request) (*http.Response, error) {
+				return tokenEndpointResponse(r, http.StatusServiceUnavailable, "application/json",
+					`{"error":"temporarily_unavailable"}`), nil
+			},
+		},
 	}
-	if expired := emitter.count(EventSessionExpired); expired != 0 {
-		t.Fatalf("EventSessionExpired emitted %d times, want 0 for an ambiguous refusal", expired)
-	}
-	if persisted, _ := client.store.Load(); persisted.RefreshToken != state.RefreshToken {
-		t.Fatalf("persisted refresh token = %q, want the untouched %q", persisted.RefreshToken, state.RefreshToken)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			emitter := &recordingTestEmitter{}
+			client, state := newGraceClientForEndpoint(t, "http://token.invalid/token", emitter)
+			transport := newResetAfterSendTransport()
+			transport.first = tt.first
+			client.httpClient = &http.Client{Transport: transport}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			result := make(chan string, 1)
+			go func() { result <- client.AccessToken(ctx) }()
+			waitForTestSignal(t, transport.entered, "refresh did not reach the transport")
+			cancel()
+			waitForTestString(t, result, "AccessToken did not return after cancellation")
+			close(transport.release)
+
+			if !tt.inconclusive {
+				waitForRefreshAttemptIdle(t, client)
+				client.mu.Lock()
+				marked := client.refreshInconclusiveLocked(client.stateRevision)
+				client.mu.Unlock()
+				if marked {
+					t.Fatal("attempt answered with an OAuth error code was marked inconclusive")
+				}
+				// The next refusal is authoritative and ends grace.
+				if token := client.AccessToken(context.Background()); token != "" {
+					t.Fatalf("AccessToken = %q after an authoritative refusal, want none", token)
+				}
+				if expired := emitter.count(EventSessionExpired); expired != 1 {
+					t.Fatalf("EventSessionExpired emitted %d times, want 1", expired)
+				}
+				return
+			}
+
+			waitForInconclusiveRefresh(t, client)
+			if token := client.AccessToken(context.Background()); token != state.AccessToken {
+				t.Fatalf("AccessToken = %q, want the grace token %q", token, state.AccessToken)
+			}
+			if expired := emitter.count(EventSessionExpired); expired != 0 {
+				t.Fatalf("EventSessionExpired emitted %d times, want 0 for an ambiguous refusal", expired)
+			}
+			if persisted, _ := client.store.Load(); persisted.RefreshToken != state.RefreshToken {
+				t.Fatalf("persisted refresh token = %q, want the untouched %q", persisted.RefreshToken, state.RefreshToken)
+			}
+		})
 	}
 }
 
