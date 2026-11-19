@@ -240,7 +240,14 @@ not, which let a revoked account regain a grace window on every launch.
 depend on a running supervisor. A refusal is treated as inconclusive, and grace
 is kept, when an earlier attempt for the same generation was abandoned in flight
 or when stored state holds a demonstrably newer refresh token; both indicate
-refresh-token rotation rather than revocation.
+refresh-token rotation rather than revocation. An inconclusive refusal is
+handled like a refused client registration above: nothing is committed, the
+generation parks, and the supervisor emits the event at grace end, so that
+event is deferred while the loop is stopped. For an abandoned attempt, grace
+lasts only for the current process: the mark lives in memory, so after a restart
+the stored token is presented again and its refusal is authoritative. A response
+lost without a cancellation (a client timeout, a dropped connection, a gateway
+error after the provider processed the request) is not marked at all.
 
 A session-integrity failure parks and emits immediately despite grace, and the
 affected generation fails closed in `AccessToken` and `AuthStatus`.
