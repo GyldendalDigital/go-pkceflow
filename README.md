@@ -288,16 +288,19 @@ and were refused" are different situations:
 
 | Refresh outcome | Grace | `oidcauth:session-expired` |
 |---|---|---|
-| Transport error, DNS, timeout, offline | continues | at grace end |
-| Any response carrying no OAuth error code, including 5xx | continues | at grace end |
+| Transport error, DNS, timeout, offline | continues | not emitted |
+| A response with no OAuth error code (including 5xx), or a code not listed below | continues | not emitted |
 | `invalid_client`, `unauthorized_client` | continues | at grace end |
-| `invalid_grant` | **ends immediately** | immediately |
-| Session-integrity failure | **ends immediately** | immediately |
+| `invalid_grant` | **ends immediately**, except in the two inconclusive cases below | immediately |
+| Session-integrity failure | **ends immediately**, in memory only | immediately |
 
-Only the `invalid_grant` row's event is delivered without a running refresh
-loop, because it is enqueued with the state commit. Every other row is delivered
-by the background supervisor, so it is deferred while that loop is stopped or
-paused. `AuthStatus` is authoritative in all cases.
+The first two rows are retried until the access token expires. The supervisor
+then parks that token generation without emitting anything, and `AuthStatus`
+reports when grace runs out. Only the `invalid_grant` row's event is delivered
+without a running refresh loop, because it is enqueued with the state commit.
+The other events are delivered by the background supervisor, so they are
+deferred while that loop is stopped or paused. `AuthStatus` is authoritative in
+all cases.
 
 `invalid_grant` means the provider was reachable and refused the refresh token
 itself: it is revoked or expired. Extending a session on that answer would let a
@@ -316,9 +319,29 @@ session-revocation mechanism, since every installed app keeps working for up to
 
 Two cases are deliberately treated as inconclusive rather than authoritative,
 because a provider that rotates refresh tokens answers `invalid_grant` for a
-merely superseded token: a refresh abandoned in flight (a cancelled request,
-`Pause`, or mobile backgrounding), and a stored state holding a demonstrably
-newer refresh token. Both keep grace.
+merely superseded token:
+
+- a refresh abandoned in flight (a cancelled request, `Pause`, or mobile
+  backgrounding);
+- a stored state holding a demonstrably newer refresh token.
+
+Both keep grace. For an abandoned refresh that lasts only for the current
+process: the mark that makes the refusal inconclusive is held in memory, and the
+spent refresh token stays stored. After a restart, that token is presented again
+and its refusal ends the session.
+
+On a provider that rotates refresh tokens, a refresh can also spend the stored
+token without the app learning the new one. This happens when the request
+reaches the provider but the response is lost to a timeout, a dropped
+connection, or a gateway error. Only a cancelled request counts as inconclusive,
+so these keep grace only until the next attempt. That attempt presents the spent
+token, receives `invalid_grant`, and ends the session.
+
+A session-integrity failure fails closed in memory and is not persisted. It also
+covers a refreshed ID token that cannot be verified because the provider's
+signing keys could not be fetched. After a restart the stored state is
+evaluated again. On a provider that rotates refresh tokens, the stored token was
+already spent before verification failed, so the next refresh is refused.
 
 ## Concurrent Login and Logout
 
