@@ -291,16 +291,16 @@ and were refused" are different situations:
 | Transport error, DNS, timeout, offline | continues | not emitted |
 | A response with no OAuth error code (including 5xx), or a code not listed below | continues | not emitted |
 | `invalid_client`, `unauthorized_client` | continues | at grace end |
-| `invalid_grant` | **ends immediately**, except in the two inconclusive cases below | immediately |
+| `invalid_grant` | **ends immediately**, except in the two inconclusive cases below | immediately; at grace end when inconclusive |
 | Session-integrity failure | **ends immediately**, in memory only | immediately |
 
 The first two rows are retried until the access token expires. The supervisor
 then parks that token generation without emitting anything, and `AuthStatus`
-reports when grace runs out. Only the `invalid_grant` row's event is delivered
-without a running refresh loop, because it is enqueued with the state commit.
-The other events are delivered by the background supervisor, so they are
-deferred while that loop is stopped or paused. `AuthStatus` is authoritative in
-all cases.
+reports when grace runs out. Only an authoritative `invalid_grant` refusal's
+event is delivered without a running refresh loop, because it is enqueued with
+the state commit. The other events, including an inconclusive refusal's, are
+delivered by the background supervisor, so they are deferred while that loop is
+stopped or paused. `AuthStatus` is authoritative in all cases.
 
 `invalid_grant` means the provider was reachable and refused the refresh token
 itself: it is revoked or expired. Extending a session on that answer would let a
@@ -325,10 +325,14 @@ merely superseded token:
   backgrounding);
 - a stored state holding a demonstrably newer refresh token.
 
-Both keep grace. For an abandoned refresh that lasts only for the current
-process: the mark that makes the refusal inconclusive is held in memory, and the
-spent refresh token stays stored. After a restart, that token is presented again
-and its refusal ends the session.
+Both keep grace. The token generation is parked as for `invalid_client`: it is
+not refreshed again, and the supervisor emits `oidcauth:session-expired` at
+grace end, or at once if grace has already run out.
+
+For an abandoned refresh, grace lasts only for the current process: the mark
+that makes the refusal inconclusive is held in memory, and the spent refresh
+token stays stored. After a restart, that token is presented again and its
+refusal ends the session.
 
 On a provider that rotates refresh tokens, a refresh can also spend the stored
 token without the app learning the new one. This happens when the request
