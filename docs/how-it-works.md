@@ -137,8 +137,12 @@ provider is reachable and refuses the refresh token itself, the session ends
 immediately rather than coasting to the end of the grace window. Because a
 provider that rotates refresh tokens gives that same answer for a merely
 superseded token, go-pkceflow first checks whether the stored state holds a newer
-refresh token, and whether an earlier attempt for this generation was abandoned
-in flight. Either makes the refusal inconclusive and grace is kept.
+refresh token, and whether an earlier attempt for this generation never learned
+the provider's answer (it ran out of its deadline, or failed after every caller
+had stopped waiting). Either makes the refusal inconclusive and grace is kept.
+A refresh that has been sent is never cut short because its caller stopped
+waiting or the refresh loop was paused: the request completes and its result is
+committed, so a rotated refresh token is not lost.
 
 go-pkceflow requests `openid profile email offline_access` by default. The
 first three request sign-in and profile claims. `offline_access` asks for a

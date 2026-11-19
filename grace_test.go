@@ -231,24 +231,22 @@ func TestCredentialRefusalSurvivesRestart(t *testing.T) {
 }
 
 // TestCredentialRefusalAfterInconclusiveAttemptKeepsGrace covers the rotation
-// hazard: releaseRefreshParticipant cancels an in-flight refresh when the last
-// caller leaves, which happens on a request timeout, Pause, or mobile
-// backgrounding. A provider that rotates refresh tokens may already have spent
-// the presented token, so the next attempt's invalid_grant does not prove the
-// session was revoked and must not hard-log-out a live user.
+// hazard: an attempt that runs out of its own deadline never learns whether the
+// provider received the presented token. A provider that rotates refresh tokens
+// may already have spent it, so the next attempt's invalid_grant does not prove
+// the session was revoked and must not hard-log-out a live user.
 func TestCredentialRefusalAfterInconclusiveAttemptKeepsGrace(t *testing.T) {
 	emitter := &recordingTestEmitter{}
 	// A dedicated endpoint, not the shared gate: the first attempt must be
-	// answerless. Letting an invalid_grant response race the cancellation would
-	// make the outcome known, which is deliberately not inconclusive.
+	// answerless. Letting an invalid_grant response race the deadline would make
+	// the outcome known, which is deliberately not inconclusive.
 	var requests atomic.Int32
-	entered := make(chan struct{}, 4)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if requests.Add(1) == 1 {
-			entered <- struct{}{}
-			// Abandoned in flight and never answered. Bounded so a stuck
-			// connection cannot wedge httptest.Server.Close at cleanup; either
-			// way the client gets no OAuth error code, which is the point.
+			// Never answered: the attempt runs out of its own deadline. Bounded
+			// so a stuck connection cannot wedge httptest.Server.Close at
+			// cleanup; either way the client gets no OAuth error code, which is
+			// the point.
 			select {
 			case <-r.Context().Done():
 			case <-time.After(time.Second):
@@ -262,13 +260,14 @@ func TestCredentialRefusalAfterInconclusiveAttemptKeepsGrace(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	client, state := newGraceClientForEndpoint(t, server.URL, emitter)
+	client.refreshAttemptTimeout = 50 * time.Millisecond
 
-	ctx, cancel := context.WithCancel(context.Background())
-	result := make(chan string, 1)
-	go func() { result <- client.AccessToken(ctx) }()
-	waitForTestSignal(t, entered, "refresh did not reach the token endpoint")
-	cancel()
-	waitForTestString(t, result, "AccessToken did not return after cancellation")
+	// The first attempt gets no answer before its own deadline. That is the one
+	// way a presented token's outcome stays unknown: a caller giving up no
+	// longer abandons the request.
+	if token := client.AccessToken(context.Background()); token != state.AccessToken {
+		t.Fatalf("AccessToken after the deadline = %q, want the grace token %q", token, state.AccessToken)
+	}
 	waitForInconclusiveRefresh(t, client)
 
 	// Second attempt: refused, but ambiguously so. Grace must hold.

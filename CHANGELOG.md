@@ -25,6 +25,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `invalid_grant`. Tests that run the fake on the real clock are unaffected.
   A test that advances a `WithClock` clock by more than the lifetime must pass a
   longer `WithRefreshTTL`, or `WithRefreshTTL(0)`, which now disables expiry.
+- A token refresh that has started is no longer abandoned when its callers stop
+  waiting. Previously, the last `AccessToken` caller cancelling, `StopRefreshLoop`
+  (including `Pause` and mobile backgrounding), or a `StartRefreshLoop` that
+  replaced a running loop cancelled the in-flight request. On a provider that
+  rotates refresh tokens, a request the provider had already received spent the
+  stored token without delivering its replacement. The next attempt presented
+  the spent token, and after a restart that ended the session. The attempt now
+  runs to completion under its own two-minute deadline and commits and persists
+  what it receives. A later caller for the same token generation joins it rather
+  than presenting the token again. As before, a refusal is treated as
+  inconclusive when an earlier attempt failed after every caller had stopped
+  waiting, unless the failure carried an OAuth error code; a dropped connection
+  or a gateway's 5xx page counts, and so does running out of the deadline. An
+  attempt for a token generation that has since been replaced, and that nobody
+  waits for, is stopped rather than allowed to delay a refresh of the current
+  generation.
+- A refreshed ID token whose verification is cut short by the refresh attempt's
+  own deadline, for example while fetching the provider's signing keys, is no
+  longer reported as a session-integrity failure that ends the session at once.
+  Nothing was found wrong with the token, so the outcome is treated as unknown
+  and grace is kept. Verification that completes and fails still fails closed.
 
 ### Fixed
 - Session timing no longer drifts while the computer sleeps. Go timers, and

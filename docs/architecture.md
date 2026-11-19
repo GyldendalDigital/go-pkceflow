@@ -238,16 +238,25 @@ is persisted, so the refusal survives a restart — the in-memory park alone did
 not, which let a revoked account regain a grace window on every launch.
 `oidcauth:session-expired` is emitted with the state commit, so it does not
 depend on a running supervisor. A refusal is treated as inconclusive, and grace
-is kept, when an earlier attempt for the same generation was abandoned in flight
-or when stored state holds a demonstrably newer refresh token; both indicate
-refresh-token rotation rather than revocation. An inconclusive refusal is
-handled like a refused client registration above: nothing is committed, the
-generation parks, and the supervisor emits the event at grace end, so that
-event is deferred while the loop is stopped. For an abandoned attempt, grace
-lasts only for the current process: the mark lives in memory, so after a restart
-the stored token is presented again and its refusal is authoritative. A response
-lost without a cancellation (a client timeout, a dropped connection, a gateway
+is kept, when an earlier attempt for the same generation never learned the
+provider's answer (it ran out of its deadline, or failed without an OAuth error
+code after every caller had stopped waiting), or when stored state holds a
+demonstrably newer refresh token; both indicate refresh-token rotation rather
+than revocation. An inconclusive refusal is handled like a refused client
+registration above: nothing is committed, the generation parks, and the
+supervisor emits the event at grace end, so that event is deferred while the
+loop is stopped. For an attempt that never learned the answer, grace lasts only
+for the current process: the mark lives in memory, so after a restart the stored
+token is presented again and its refusal is authoritative. A response lost while
+a caller is still waiting (a client timeout, a dropped connection, a gateway
 error after the provider processed the request) is not marked at all.
+
+A refresh attempt is detached from its callers. Once started, it runs until the
+provider answers or its own deadline (two minutes) passes, even if every caller
+stops waiting or the supervisor is stopped, paused, or replaced. A later caller
+for the same generation joins it rather than starting a second request. Cutting
+the request short would spend a rotating refresh token without delivering its
+replacement.
 
 A session-integrity failure parks and emits immediately despite grace, and the
 affected generation fails closed in `AccessToken` and `AuthStatus`.

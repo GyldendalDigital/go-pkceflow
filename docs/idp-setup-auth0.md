@@ -172,8 +172,8 @@ client credentials.
   revocation, or refresh-token reuse detection. Do not retry with an older
   rotated token. go-pkceflow treats this as an authoritative refusal and ends
   the grace period immediately, unless the stored state holds a newer refresh
-  token or an earlier attempt was abandoned in flight, which both indicate
-  rotation rather than revocation.
+  token or an earlier attempt never learned Auth0's answer, which both
+  indicate rotation rather than revocation.
 - **Logout does not return to the app**: add the exact post-logout URI to
   **Allowed Logout URLs** and confirm RP-Initiated Logout endpoint discovery is
   enabled for the tenant.

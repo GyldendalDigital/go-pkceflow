@@ -65,6 +65,9 @@ type Client struct {
 
 	pendingEvents    []clientEvent
 	eventDispatching bool
+
+	// refreshAttemptTimeout overrides defaultRefreshAttemptTimeout; tests only.
+	refreshAttemptTimeout time.Duration
 }
 
 // New creates a new Client with the given configuration and flow handler.

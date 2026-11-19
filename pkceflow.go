@@ -75,10 +75,11 @@ type refreshLoopSchedule struct {
 	eventAt        time.Time
 	eventEmitted   bool
 
-	// inconclusive records that an attempt for this generation was abandoned
-	// after the request went out, so the provider's answer is unknown. A later
-	// credential refusal for the same generation is then ambiguous and must not
-	// be treated as an authoritative revocation.
+	// inconclusive records that an attempt for this generation failed after
+	// the request went out without learning the provider's answer: it ran out
+	// of its deadline, or failed after every caller had stopped waiting. A
+	// later credential refusal for the same generation is then ambiguous and
+	// must not be treated as an authoritative revocation.
 	inconclusive bool
 }
 
@@ -162,6 +163,12 @@ func (c *Client) startRefreshLoop(
 // StopRefreshLoop cancels the background refresh and persistence supervisors if
 // they are running. It does not forget pending persistence recovery and does not
 // wait for a supervisor or an already-running TokenPersistence call to finish.
+//
+// A token refresh already in flight is not cancelled: a provider that rotates
+// refresh tokens may have spent the presented one, so the attempt runs until the
+// provider answers or its own two-minute deadline passes. Its result is then
+// committed and persisted as usual, so a Save and an EventTokenRefreshed or
+// EventSessionExpired can still follow StopRefreshLoop.
 func (c *Client) StopRefreshLoop() {
 	c.mu.Lock()
 	handle := c.refreshRun
