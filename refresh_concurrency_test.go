@@ -1,16 +1,20 @@
 package pkceflow
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -120,50 +124,6 @@ func (g *refreshEndpointGate) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		request,
 		request,
 	)
-}
-
-type abandonedAttemptTransport struct {
-	entered     chan struct{}
-	cancelled   chan struct{}
-	release     chan struct{}
-	releaseOnce sync.Once
-	requests    atomic.Int32
-}
-
-func newAbandonedAttemptTransport() *abandonedAttemptTransport {
-	return &abandonedAttemptTransport{
-		entered:   make(chan struct{}),
-		cancelled: make(chan struct{}),
-		release:   make(chan struct{}),
-	}
-}
-
-func (t *abandonedAttemptTransport) unblock() {
-	t.releaseOnce.Do(func() {
-		close(t.release)
-	})
-}
-
-func (t *abandonedAttemptTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	if t.requests.Add(1) == 1 {
-		close(t.entered)
-		<-request.Context().Done()
-		close(t.cancelled)
-		<-t.release
-		return nil, request.Context().Err()
-	}
-
-	return &http.Response{
-		StatusCode: http.StatusOK,
-		Status:     "200 OK",
-		Header: http.Header{
-			"Content-Type": {"application/json"},
-		},
-		Body: io.NopCloser(strings.NewReader(
-			`{"access_token":"access-retry","refresh_token":"refresh-retry","token_type":"Bearer","expires_in":3600}`,
-		)),
-		Request: request,
-	}, nil
 }
 
 type recordingTestEmitter struct {
@@ -837,11 +797,13 @@ func TestRefreshAttemptSurvivesLeaderCancellationForLiveWaiter(t *testing.T) {
 	}
 }
 
-func TestNewCallerWaitsForAbandonedAttemptToFinish(t *testing.T) {
-	client, snapshot, _ := newRefreshConcurrencyClient(t, nil, nil)
-	transport := newAbandonedAttemptTransport()
-	t.Cleanup(transport.unblock)
-	client.httpClient = &http.Client{Transport: transport}
+// A provider that rotates refresh tokens spends the presented token on receipt,
+// so a caller giving up must not abandon the request: its response carries the
+// only copy of the replacement. A later caller joins the same attempt instead of
+// presenting the spent token again.
+func TestRefreshAttemptOutlivesCallerAndIsJoined(t *testing.T) {
+	store := &memoryStore{}
+	client, snapshot, endpoint := newRefreshConcurrencyClient(t, store, nil)
 
 	leaderCtx, cancelLeader := context.WithCancel(context.Background())
 	t.Cleanup(cancelLeader)
@@ -850,14 +812,16 @@ func TestNewCallerWaitsForAbandonedAttemptToFinish(t *testing.T) {
 		state, err := client.refresh(leaderCtx, &snapshot)
 		first <- refreshResult{state: state, err: err}
 	}()
-	waitForTestSignal(t, transport.entered, "leader refresh did not reach custom transport")
+	waitForTestSignal(t, endpoint.entered, "leader refresh did not reach token endpoint")
 
 	cancelLeader()
 	firstResult := waitForRefreshResult(t, first, "cancelled refresh leader did not return")
 	if firstResult.err != context.Canceled {
 		t.Fatalf("leader refresh error = %v, want context.Canceled", firstResult.err)
 	}
-	waitForTestSignal(t, transport.cancelled, "abandoned attempt context was not cancelled")
+	if attemptCtxErr := inFlightRefreshAttemptErr(t, client); attemptCtxErr != nil {
+		t.Fatalf("attempt context after the last caller left = %v, want still running", attemptCtxErr)
+	}
 
 	waiterCtx := newObservedDoneContext(context.Background())
 	second := make(chan refreshResult, 1)
@@ -865,22 +829,89 @@ func TestNewCallerWaitsForAbandonedAttemptToFinish(t *testing.T) {
 		state, err := client.refresh(waiterCtx, &snapshot)
 		second <- refreshResult{state: state, err: err}
 	}()
-	waitForTestSignal(t, waiterCtx.observed, "new caller did not wait for the abandoned attempt")
-	if got := transport.requests.Load(); got != 1 {
-		t.Fatalf("requests before abandoned attempt finished = %d, want 1", got)
+	waitForTestSignal(t, waiterCtx.observed, "new caller did not join the running attempt")
+
+	endpoint.unblock()
+	secondResult := waitForRefreshResult(t, second, "joined caller did not return")
+	if secondResult.err != nil {
+		t.Fatalf("joined caller refresh: %v", secondResult.err)
+	}
+	if secondResult.state.AccessToken != "access-1" {
+		t.Fatalf("joined caller access token = %q, want access-1", secondResult.state.AccessToken)
+	}
+	if got := endpoint.requests.Load(); got != 1 {
+		t.Fatalf("token endpoint requests = %d, want 1: the refresh token was presented twice", got)
+	}
+	if persisted, _ := store.Load(); persisted.RefreshToken != "refresh-1" {
+		t.Fatalf("persisted refresh token = %q, want the rotated refresh-1", persisted.RefreshToken)
+	}
+}
+
+// With nobody left waiting, the attempt still commits what the provider sent.
+func TestRefreshAttemptCommitsAfterEveryCallerLeft(t *testing.T) {
+	store := &memoryStore{}
+	client, snapshot, endpoint := newRefreshConcurrencyClient(t, store, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	result := make(chan refreshResult, 1)
+	go func() {
+		state, err := client.refresh(ctx, &snapshot)
+		result <- refreshResult{state: state, err: err}
+	}()
+	waitForTestSignal(t, endpoint.entered, "refresh did not reach token endpoint")
+	cancel()
+	if got := waitForRefreshResult(t, result, "cancelled caller did not return"); got.err != context.Canceled {
+		t.Fatalf("cancelled caller error = %v, want context.Canceled", got.err)
 	}
 
-	transport.unblock()
-	secondResult := waitForRefreshResult(t, second, "new caller did not retry after abandoned attempt")
-	if secondResult.err != nil {
-		t.Fatalf("new caller refresh: %v", secondResult.err)
+	endpoint.unblock()
+	waitForRefreshAttemptIdle(t, client)
+
+	client.mu.Lock()
+	state := client.state
+	inconclusive := client.refreshInconclusiveLocked(client.stateRevision)
+	client.mu.Unlock()
+	if state.AccessToken != "access-1" || state.RefreshToken != "refresh-1" {
+		t.Fatalf("state after the attempt finished = %+v, want the rotated token pair", state)
 	}
-	if secondResult.state.AccessToken != "access-retry" {
-		t.Fatalf("new caller access token = %q, want access-retry", secondResult.state.AccessToken)
+	if inconclusive {
+		t.Fatal("a completed attempt was recorded as inconclusive")
 	}
-	if got := transport.requests.Load(); got != 2 {
-		t.Fatalf("requests after abandoned attempt finished = %d, want 2", got)
+	if persisted, _ := store.Load(); persisted.RefreshToken != "refresh-1" {
+		t.Fatalf("persisted refresh token = %q, want the rotated refresh-1", persisted.RefreshToken)
 	}
+	if token := client.AccessToken(context.Background()); token != "access-1" {
+		t.Fatalf("AccessToken = %q, want access-1 without another refresh", token)
+	}
+	if got := endpoint.requests.Load(); got != 1 {
+		t.Fatalf("token endpoint requests = %d, want 1", got)
+	}
+}
+
+func inFlightRefreshAttemptErr(t *testing.T, client *Client) error {
+	t.Helper()
+	client.refreshMu.Lock()
+	defer client.refreshMu.Unlock()
+	if client.refreshAttempt == nil {
+		t.Fatal("no refresh attempt is in flight")
+	}
+	return client.refreshAttempt.ctx.Err()
+}
+
+func waitForRefreshAttemptIdle(t *testing.T, client *Client) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		client.refreshMu.Lock()
+		idle := client.refreshAttempt == nil
+		client.refreshMu.Unlock()
+		if idle {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("refresh attempt did not finish")
 }
 
 func TestRefreshCannotResurrectLoggedOutSession(t *testing.T) {
@@ -1253,4 +1284,195 @@ func TestRefreshLoopReplacementDoesNotWaitForStuckPredecessor(t *testing.T) {
 	waitForTestSignal(t, second.done, "replacement refresh runner did not stop")
 	releaseFirst()
 	waitForTestSignal(t, first.done, "first refresh runner did not exit")
+}
+
+// resetAfterSendTransport models a request that reached the provider (which
+// rotated the token) but whose connection was torn down before the response
+// arrived, as when a mobile OS reclaims a backgrounded app's socket. The error
+// is a transport error, not the attempt context. Every later request is refused
+// with invalid_grant, as a rotating provider answers for the spent token.
+type resetAfterSendTransport struct {
+	entered  chan struct{}
+	release  chan struct{}
+	requests atomic.Int32
+}
+
+func newResetAfterSendTransport() *resetAfterSendTransport {
+	return &resetAfterSendTransport{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (t *resetAfterSendTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if t.requests.Add(1) == 1 {
+		close(t.entered)
+		<-t.release // deliberately ignores r.Context(): the bytes are on the wire
+		return nil, &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}
+	}
+	return &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Status:     "400 Bad Request",
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader([]byte(`{"error":"invalid_grant"}`))),
+		Request:    r,
+	}, nil
+}
+
+// A caller that gives up no longer cancels the attempt, so a failure that
+// follows can be a transport error rather than a context error. It is still
+// unknown whether the provider spent the token, so the next refusal must keep
+// grace exactly as it did when leaving cancelled the attempt.
+func TestRefreshFailureAfterEveryCallerLeftIsInconclusive(t *testing.T) {
+	emitter := &recordingTestEmitter{}
+	client, state := newGraceClientForEndpoint(t, "http://token.invalid/token", emitter)
+	transport := newResetAfterSendTransport()
+	client.httpClient = &http.Client{Transport: transport}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan string, 1)
+	go func() { result <- client.AccessToken(ctx) }()
+	waitForTestSignal(t, transport.entered, "refresh did not reach the transport")
+	cancel()
+	waitForTestString(t, result, "AccessToken did not return after cancellation")
+	close(transport.release)
+	waitForInconclusiveRefresh(t, client)
+
+	if token := client.AccessToken(context.Background()); token != state.AccessToken {
+		t.Fatalf("AccessToken = %q, want the grace token %q", token, state.AccessToken)
+	}
+	if expired := emitter.count(EventSessionExpired); expired != 0 {
+		t.Fatalf("EventSessionExpired emitted %d times, want 0 for an ambiguous refusal", expired)
+	}
+	if persisted, _ := client.store.Load(); persisted.RefreshToken != state.RefreshToken {
+		t.Fatalf("persisted refresh token = %q, want the untouched %q", persisted.RefreshToken, state.RefreshToken)
+	}
+}
+
+// A later caller joins an attempt nobody waits for, and so shares its failure
+// instead of presenting the same refresh token a second time.
+func TestRefreshCallerJoinsOrphanedAttemptThatFails(t *testing.T) {
+	client, snapshot, endpoint := newRefreshConcurrencyClient(t, nil, nil)
+	endpoint.status = http.StatusServiceUnavailable
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	t.Cleanup(cancelLeader)
+	first := make(chan refreshResult, 1)
+	go func() {
+		state, err := client.refresh(leaderCtx, &snapshot)
+		first <- refreshResult{state: state, err: err}
+	}()
+	waitForTestSignal(t, endpoint.entered, "leader refresh did not reach token endpoint")
+	cancelLeader()
+	waitForRefreshResult(t, first, "cancelled refresh leader did not return")
+
+	waiterCtx := newObservedDoneContext(context.Background())
+	second := make(chan refreshResult, 1)
+	go func() {
+		state, err := client.refresh(waiterCtx, &snapshot)
+		second <- refreshResult{state: state, err: err}
+	}()
+	waitForTestSignal(t, waiterCtx.observed, "new caller did not join the orphaned attempt")
+
+	endpoint.unblock()
+	if result := waitForRefreshResult(t, second, "joined caller did not return"); result.err == nil {
+		t.Fatal("joined caller succeeded, want the shared attempt's failure")
+	}
+	if got := endpoint.requests.Load(); got != 1 {
+		t.Fatalf("token endpoint requests = %d, want 1: the refresh token was presented twice", got)
+	}
+}
+
+// An attempt that nobody waits for, for a generation that has since been
+// replaced, can never commit. It must not hold up a refresh of the current
+// generation until its own deadline.
+func TestOrphanedAttemptForReplacedGenerationDoesNotBlock(t *testing.T) {
+	client, snapshot, endpoint := newRefreshConcurrencyClient(t, nil, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	first := make(chan refreshResult, 1)
+	go func() {
+		state, err := client.refresh(ctx, &snapshot)
+		first <- refreshResult{state: state, err: err}
+	}()
+	waitForTestSignal(t, endpoint.entered, "first refresh did not reach token endpoint")
+	cancel()
+	waitForRefreshResult(t, first, "cancelled caller did not return")
+
+	// A Login or RestoreSession installs a new generation.
+	newer := TokenState{
+		AccessToken:  "access-login",
+		RefreshToken: "refresh-login",
+		IDToken:      "id-token-login",
+		ExpiresAt:    time.Now().Add(-time.Second),
+		LastAuthAt:   time.Now().Add(-time.Minute),
+	}
+	client.mu.Lock()
+	client.advanceStateLocked(&newer)
+	client.mu.Unlock()
+
+	second := make(chan refreshResult, 1)
+	go func() {
+		state, err := client.refresh(context.Background(), &newer)
+		second <- refreshResult{state: state, err: err}
+	}()
+	waitForTestSignal(t, endpoint.entered, "the current generation's refresh waited behind the replaced one")
+	endpoint.unblock()
+	result := waitForRefreshResult(t, second, "current generation's refresh did not return")
+	if result.err != nil {
+		t.Fatalf("current generation's refresh: %v", result.err)
+	}
+	if result.state.AccessToken != "access-2" {
+		t.Fatalf("access token = %q, want access-2 from the current generation's own request", result.state.AccessToken)
+	}
+}
+
+// The provider has answered and rotated, but the attempt's own deadline passes
+// while the refreshed ID token's signing keys are fetched, as on the first
+// refresh after a restart. Nothing was found wrong with the token, so this is
+// an unknown outcome, not a session-integrity failure.
+func TestDeadlineDuringIDTokenVerificationIsInconclusive(t *testing.T) {
+	jwks := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(time.Second):
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"keys":[]}`)
+	}))
+	t.Cleanup(jwks.Close)
+
+	client, snapshot, endpoint := newRefreshConcurrencyClient(t, nil, nil)
+	const issuer = "https://issuer.example"
+	enc := base64.RawURLEncoding.EncodeToString
+	endpoint.idToken = enc([]byte(`{"alg":"RS256","kid":"k1","typ":"JWT"}`)) + "." +
+		enc([]byte(fmt.Sprintf(
+			`{"iss":%q,"aud":"test-client","sub":"user","exp":%d,"iat":%d}`,
+			issuer, time.Now().Add(time.Hour).Unix(), time.Now().Unix(),
+		))) + "." + enc([]byte("not-a-signature"))
+	endpoint.unblock()
+	client.verifier = oidc.NewVerifier(
+		issuer,
+		oidc.NewRemoteKeySet(context.Background(), jwks.URL),
+		&oidc.Config{ClientID: "test-client"},
+	)
+	client.refreshAttemptTimeout = 100 * time.Millisecond
+
+	_, err := client.refresh(context.Background(), &snapshot)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("refresh error = %v, want the attempt's deadline", err)
+	}
+	if isSessionIntegrityError(err) {
+		t.Fatalf("refresh error = %v, want no session-integrity failure", err)
+	}
+	client.mu.Lock()
+	integrity := client.refreshIntegrityBlockedLocked()
+	inconclusive := client.refreshInconclusiveLocked(client.stateRevision)
+	client.mu.Unlock()
+	if integrity {
+		t.Fatal("generation is integrity-blocked after its own deadline cut verification short")
+	}
+	if !inconclusive {
+		t.Fatal("generation is not marked inconclusive after verification was cut short")
+	}
 }

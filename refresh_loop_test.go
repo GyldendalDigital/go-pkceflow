@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -1238,5 +1239,94 @@ func TestRefreshLoopProductionSuccessCommitsNewGeneration(t *testing.T) {
 	}
 	if gotRevision != beforeRevision+1 {
 		t.Fatalf("state revision = %d, want %d", gotRevision, beforeRevision+1)
+	}
+}
+
+// Stopping the loop (Pause, mobile backgrounding, a replacing Start) while its
+// refresh is on the wire must not discard the rotated token the provider sends
+// back: the attempt finishes and commits on its own.
+func TestRefreshLoopStopDoesNotAbandonInFlightRefresh(t *testing.T) {
+	authenticatedAt := time.Now().UTC().Truncate(time.Second)
+	clock := newManualRefreshClock(authenticatedAt)
+	emitter := newRefreshLoopEventRecorder()
+	store := &memoryStore{}
+	client, state, endpoint := newRefreshConcurrencyClient(t, store, emitter)
+	state.LastAuthAt = authenticatedAt
+	state.ExpiresAt = authenticatedAt.Add(100 * time.Second)
+	client.mu.Lock()
+	client.state = state
+	client.clock = clock
+	client.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		client.refreshLoop(ctx)
+	}()
+
+	clock.fire(t, clock.nextTimer(t))
+	waitForTestSignal(t, endpoint.entered, "scheduled refresh did not reach the token endpoint")
+	stopRefreshLoopTest(t, cancel, done)
+
+	endpoint.unblock()
+	select {
+	case event := <-emitter.events:
+		if event != EventTokenRefreshed {
+			t.Fatalf("event = %q, want %q", event, EventTokenRefreshed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("refresh in flight when the loop stopped was not committed")
+	}
+
+	client.mu.Lock()
+	got := client.state
+	inconclusive := client.refreshInconclusiveLocked(client.stateRevision)
+	client.mu.Unlock()
+	if got.AccessToken != "access-1" || got.RefreshToken != "refresh-1" {
+		t.Fatalf("state = %+v, want the rotated token pair", got)
+	}
+	if inconclusive {
+		t.Fatal("a completed attempt was recorded as inconclusive")
+	}
+	if persisted, _ := store.Load(); persisted.RefreshToken != "refresh-1" {
+		t.Fatalf("persisted refresh token = %q, want the rotated refresh-1", persisted.RefreshToken)
+	}
+	if got := endpoint.requests.Load(); got != 1 {
+		t.Fatalf("token endpoint requests = %d, want 1", got)
+	}
+}
+
+// Pause or mobile backgrounding stops the loop while its refresh is on the
+// wire, and the OS then tears the socket down. The provider may have spent the
+// token, so the next refusal must keep grace.
+func TestRefreshLoopStopThenConnectionDropKeepsGrace(t *testing.T) {
+	emitter := &recordingTestEmitter{}
+	client, state := newGraceClientForEndpoint(t, "http://token.invalid/token", emitter)
+	transport := newResetAfterSendTransport()
+	client.httpClient = &http.Client{Transport: transport}
+	clock := newManualRefreshClock(state.LastAuthAt)
+	client.mu.Lock()
+	client.clock = clock
+	client.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		client.refreshLoop(ctx)
+	}()
+	clock.fire(t, clock.nextTimer(t))
+	waitForTestSignal(t, transport.entered, "scheduled refresh did not reach the transport")
+	stopRefreshLoopTest(t, cancel, done)
+	close(transport.release)
+	waitForInconclusiveRefresh(t, client)
+
+	clock.set(state.ExpiresAt.Add(time.Minute))
+	if token := client.AccessToken(context.Background()); token != state.AccessToken {
+		t.Fatalf("AccessToken after resume = %q, want the grace token %q", token, state.AccessToken)
+	}
+	if expired := emitter.count(EventSessionExpired); expired != 0 {
+		t.Fatalf("EventSessionExpired emitted %d times, want 0 for an ambiguous refusal", expired)
 	}
 }

@@ -321,29 +321,35 @@ Two cases are deliberately treated as inconclusive rather than authoritative,
 because a provider that rotates refresh tokens answers `invalid_grant` for a
 merely superseded token:
 
-- a refresh abandoned in flight (a cancelled request, `Pause`, or mobile
-  backgrounding);
+- a refresh that never learned the provider's answer: it ran out of its
+  two-minute deadline, or failed after every caller had stopped waiting;
 - a stored state holding a demonstrably newer refresh token.
 
 Both keep grace. The token generation is parked as for `invalid_client`: it is
 not refreshed again, and the supervisor emits `oidcauth:session-expired` at
 grace end, or at once if grace has already run out.
 
-For an abandoned refresh, grace lasts only for the current process: the mark
-that makes the refusal inconclusive is held in memory, and the spent refresh
-token stays stored. After a restart, that token is presented again and its
-refusal ends the session.
+A refresh that has been sent is not abandoned when its caller cancels, or when
+the refresh loop is paused or stopped (including mobile backgrounding). The
+request completes, and the rotated token it returns is committed and persisted.
+
+For a refresh that never learned the answer, grace lasts only for the current
+process: the mark that makes the refusal inconclusive is held in memory, and the
+spent refresh token stays stored. After a restart, that token is presented again
+and its refusal ends the session.
 
 On a provider that rotates refresh tokens, a refresh can also spend the stored
 token without the app learning the new one. This happens when the request
 reaches the provider but the response is lost to a timeout, a dropped
-connection, or a gateway error. Only a cancelled request counts as inconclusive,
-so these keep grace only until the next attempt. That attempt presents the spent
-token, receives `invalid_grant`, and ends the session.
+connection, or a gateway error. While a caller is still waiting for the attempt,
+such a loss is not marked inconclusive, so it keeps grace only until the next
+attempt. That attempt presents the spent token, receives `invalid_grant`, and
+ends the session.
 
 A session-integrity failure fails closed in memory and is not persisted. It also
 covers a refreshed ID token that cannot be verified because the provider's
-signing keys could not be fetched. After a restart the stored state is
+signing keys could not be fetched; only a fetch cut short by the attempt's own
+deadline counts as inconclusive instead. After a restart the stored state is
 evaluated again. On a provider that rotates refresh tokens, the stored token was
 already spent before verification failed, so the next refresh is refused.
 

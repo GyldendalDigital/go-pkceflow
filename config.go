@@ -40,8 +40,8 @@ type Config struct {
 	// cover "the app asked and was refused": when the provider rejects the
 	// refresh token itself with invalid_grant, the session ends at once
 	// regardless of how much of this period remains — unless that refusal cannot
-	// be trusted as authoritative, because an earlier attempt was abandoned in
-	// flight or stored state holds a newer refresh token.
+	// be trusted as authoritative, because an earlier attempt never learned
+	// the provider's answer or stored state holds a newer refresh token.
 	GracePeriod time.Duration
 
 	// LoginTimeout is the maximum time to wait for the user to complete login.

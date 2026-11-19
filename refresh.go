@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"golang.org/x/oauth2"
 )
@@ -11,6 +12,14 @@ import (
 var errScheduledRefreshExpired = errors.New(
 	"pkceflow: scheduled refresh reached access-token expiry",
 )
+
+// defaultRefreshAttemptTimeout bounds every refresh attempt, whether or not a
+// caller still waits for it. It is generous on purpose: cutting a request short after
+// the provider received it spends a rotating refresh token without delivering
+// its replacement, so the bound exists only to stop a blackholed endpoint from
+// holding the attempt open forever. An HTTPClient timeout, when configured,
+// normally ends the request well before this.
+const defaultRefreshAttemptTimeout = 2 * time.Minute
 
 type refreshAttempt struct {
 	revision     uint64
@@ -22,6 +31,10 @@ type refreshAttempt struct {
 	complete     chan struct{}
 	state        TokenState
 	err          error
+
+	// orphaned records that participants reached zero at some point. Guarded
+	// by refreshMu.
+	orphaned bool
 }
 
 // refresh performs a single token refresh using the refresh token.
@@ -133,7 +146,7 @@ func (c *Client) commitCredentialRefusal(
 		// to block state commits.
 		c.logger.Warn(
 			"treating refresh refusal as inconclusive; an earlier attempt for " +
-				"this token generation was abandoned in flight",
+				"this token generation never learned the provider's answer",
 		)
 		return false
 	}
@@ -259,7 +272,14 @@ func (c *Client) beginRefreshAttempt(
 		}
 		active := c.refreshAttempt
 		if active == nil {
-			attemptCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+			// Detached from the caller and bounded by its own deadline: once a
+			// refresh token is presented, a rotating provider may already have
+			// spent it, so the attempt must be allowed to learn the outcome even
+			// after every caller has stopped waiting.
+			attemptCtx, cancel := context.WithTimeout(
+				context.WithoutCancel(ctx),
+				c.refreshAttemptDeadline(),
+			)
 			attempt := &refreshAttempt{
 				revision:     revision,
 				snapshot:     *snapshot,
@@ -277,10 +297,19 @@ func (c *Client) beginRefreshAttempt(
 		sameRevision := active.revision == revision
 		c.mu.Unlock()
 
-		if sameRevision && active.participants > 0 {
+		// An attempt keeps running after its last participant leaves, so a
+		// later caller for the same generation joins it rather than presenting
+		// the same refresh token a second time.
+		if sameRevision {
 			active.participants++
 			c.refreshMu.Unlock()
 			return active, false, TokenState{}, nil
+		}
+		if active.participants == 0 {
+			// Nobody waits for this attempt and its generation has been
+			// replaced, so whatever it learns can never be committed. Stop it
+			// rather than make the current generation queue behind it.
+			active.cancel()
 		}
 		c.refreshMu.Unlock()
 		select {
@@ -311,13 +340,32 @@ func (c *Client) waitForRefreshAttempt(
 	}
 }
 
+// releaseRefreshParticipant records that a caller stopped waiting. It never
+// cancels the attempt: by the time a caller can leave, the refresh token may
+// already be on the wire, and a provider that rotates refresh tokens spends it
+// on receipt. Abandoning the request then would discard the only copy of its
+// replacement. The attempt finishes, or runs out of its own deadline, and
+// commits whatever it learned.
+//
+// Once nobody waits, the attempt is marked orphaned for good. A failure after
+// that may come from the app being paused or backgrounded mid-request (a socket
+// reclaimed by the OS, say), so finishRefreshAttempt treats it as inconclusive.
 func (c *Client) releaseRefreshParticipant(attempt *refreshAttempt) {
 	c.refreshMu.Lock()
 	attempt.participants--
-	if attempt.participants == 0 && c.refreshAttempt == attempt {
-		attempt.cancel()
+	if attempt.participants == 0 {
+		attempt.orphaned = true
 	}
 	c.refreshMu.Unlock()
+}
+
+// refreshAttemptDeadline bounds one refresh attempt, including verifying the
+// refreshed ID token, independently of any caller.
+func (c *Client) refreshAttemptDeadline() time.Duration {
+	if c.refreshAttemptTimeout > 0 {
+		return c.refreshAttemptTimeout
+	}
+	return defaultRefreshAttemptTimeout
 }
 
 func (c *Client) finishRefreshAttempt(
@@ -337,14 +385,16 @@ func (c *Client) finishRefreshAttempt(
 				&attempt.snapshot,
 				c.now(),
 			)
-		case attempt.ctx.Err() != nil && !errors.As(err, new(*AuthError)):
-			// The attempt was abandoned while the request was in flight, so the
-			// provider's answer is unknown. Keying off the attempt context
-			// rather than the error's shape is deliberate: cancellation races
-			// between the transport and the peer, so the surfaced error may be
-			// a cancellation, an EOF, or a reset. An OAuth error code is the
+		case (attempt.ctx.Err() != nil || attempt.orphaned) &&
+			!errors.As(err, new(*AuthError)):
+			// The attempt ran out of its deadline, or failed after every caller
+			// had stopped waiting, while the request was in flight, so the
+			// provider's answer is unknown. Keying off the attempt's state
+			// rather than the error's shape is deliberate: a request cut short
+			// may surface as a cancellation, an EOF, or a reset, and a mobile OS
+			// may reclaim a paused app's socket. An OAuth error code is the
 			// exception: it proves the provider did answer, so the outcome is
-			// known even though the attempt was also cancelled.
+			// known.
 			c.markRefreshInconclusiveLocked(attempt.revision)
 		}
 		c.mu.Unlock()
@@ -408,6 +458,23 @@ func (c *Client) performRefresh(
 		idToken = snapshot.IDToken
 	} else {
 		verified, err := c.verifyIDToken(ctx, verifier, idToken)
+		if err != nil && ctx.Err() != nil {
+			// The attempt's own deadline (or a newer generation) cut
+			// verification short, for instance while fetching signing keys.
+			// Nothing was found wrong with the token, so this is not a
+			// session-integrity failure: report the attempt's context error,
+			// which finishRefreshAttempt treats as an unknown outcome. go-oidc
+			// flattens the fetch error, so the context is the only reliable
+			// signal.
+			state, refreshErr := c.refreshFailure(
+				revision,
+				fmt.Errorf(
+					"pkceflow: token refresh did not finish verifying the refreshed ID token: %w",
+					ctx.Err(),
+				),
+			)
+			return state, false, refreshErr
+		}
 		if err != nil {
 			state, refreshErr := c.refreshFailure(
 				revision,
